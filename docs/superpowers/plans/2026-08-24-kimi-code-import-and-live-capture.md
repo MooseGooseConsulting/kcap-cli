@@ -24,10 +24,18 @@ sessions. Historical import does not need hooks.
 
 ## Observed Kimi local layout and wire contract
 
-The following layout was observed locally on Windows; it must be re-probed on
-macOS and Linux before hard-coding path behavior:
+Two Kimi layouts were observed locally on Windows. Both are supported
+discovery variants; neither replaces the other. Their platform/version
+selection boundary has not been established, so discovery checks both roots.
 
 ```text
+~/.kimi-code/sessions/
+  wd_<workspace-slug>_<suffix>/
+    session_<dashed-uuid>/
+      agents/
+        main/wire.jsonl
+        agent-N/wire.jsonl
+
 ~/.kimi/sessions/
   <32-lowercase-hex-directory>/
     <dashed-uuid>/
@@ -36,13 +44,13 @@ macOS and Linux before hard-coding path behavior:
         <agent-id>/wire.jsonl
 ```
 
-This is the local Windows layout actually inspected for this plan. The
-`wire.jsonl` directly below the dashed UUID directory is the root stream;
-`subagents/<agent-id>/wire.jsonl` files are child streams. The leading
-32-character directory is an observed grouping level, not the canonical
-session id. Do not replace this evidence with the previously assumed
-`~/.kimi-code/.../session_<uuid>/agents/{main,agent-N}` tree. The wire records
-use Unix epoch **milliseconds** in `time`.
+In the `.kimi-code` layout, `agents/main/wire.jsonl` is the root stream and
+`agents/agent-N/wire.jsonl` files are children; the `session_` directory's
+dashed UUID is the session identity. In the `.kimi` layout, `wire.jsonl`
+directly below the dashed UUID is the root stream and
+`subagents/<agent-id>/wire.jsonl` files are children. Its leading 32-character
+directory is an observed grouping level, not the canonical session id. The
+wire records use Unix epoch **milliseconds** in `time`.
 
 Observed top-level records (field values omitted intentionally):
 
@@ -64,11 +72,13 @@ interpretation.
 
 ### Privacy and fixture rules
 
-- Never add a real `~/.kimi` file to the kcap repository or test output.
+- Never add a real `~/.kimi-code` or `~/.kimi` file to the kcap repository or
+  test output.
 - Build small synthetic fixtures with only invented prompts, paths, command
   names, UUIDs, and timestamps.
-- Test structural variants: no `profile.bind`, malformed line, no `main`,
-  empty child, incomplete final line, and a session with multiple children.
+- Test both layout variants plus structural variants: no `profile.bind`,
+  malformed line, no `.kimi-code` `main` root, empty child, incomplete final
+  line, and a session with multiple children.
 - Do not log raw transcript content in normal CLI diagnostics. Report paths,
   session IDs, line counts, and parser error categories only.
 
@@ -92,15 +102,19 @@ Implement one routed `IImportSource`, with a test-only sessions-root override,
 and copy the Kiro/Pi mechanics exactly unless the local Kimi topology makes a
 delta unavoidable:
 
-1. `Vendor` is `"kimi"`; `IsAvailable` is `Directory.Exists(root)`;
+1. `Vendor` is `"kimi"`; `IsAvailable` is true when either observed sessions
+   root exists;
    `SupportsTitleGeneration` and `AttachesChildContentOnReplay` are both
    `false`. Classifications set `FilePath = ""` and `EncodedCwd = ""` so the
    routed `ImportSessionAsync` path owns the work.
-2. Discover recursively under `~/.kimi/sessions`, but admit only a root
-   `wire.jsonl` located directly below a dashed-UUID directory. Normalize that
-   UUID to the existing dashless session-id form. Store root wire path, cwd,
-   model, and timestamps in `SourceMeta`; apply `--session`, `--cwd`, and
-   `--since` before classification. Read only locally; use synthetic fixtures.
+2. Discover both observed roots recursively: admit
+   `~/.kimi-code/sessions/**/session_<dashed-uuid>/agents/main/wire.jsonl` and
+   `~/.kimi/sessions/**/<dashed-uuid>/wire.jsonl` only. Normalize each
+   directory UUID to the existing dashless session-id form and de-duplicate it
+   with Pi's `seen` set if both layouts contain the same session. Store root
+   wire path, child paths, cwd, model, and timestamps in `SourceMeta`; apply
+   `--session`, `--cwd`, and `--since` before classification. Read only locally;
+   use synthetic fixtures.
 3. Classify with Kiro/Pi's `ReadTranscriptStatsAsync`: count nonblank records,
    retain the last nonblank physical index, use the existing root
    `GET /api/sessions/{id}/last-line` helper, and classify `New`, `Partial`, or
@@ -139,15 +153,16 @@ delta unavoidable:
 
 ### Unavoidable local Kimi deltas
 
-- Root discovery is recursive because of the observed leading 32-hex grouping
-  directory, and a session root is `<dashed-uuid>/wire.jsonl`, not an
-  `agents/main/wire.jsonl` file.
-- The dashed UUID directory supplies the session identity; the grouping
+- Root discovery has two local shapes: `.kimi-code` uses
+  `session_<dashed-uuid>/agents/main/wire.jsonl`; `.kimi` uses
+  `<dashed-uuid>/wire.jsonl` below a leading 32-hex grouping directory. The
+  dashed UUID supplies the session identity in both; the `.kimi` grouping
   directory does not.
-- `subagents/<agent-id>/wire.jsonl` exists locally. Record the child paths in
-  `SourceMeta` for discovery visibility only. This plan does not add child
-  watermarks, `agentId` delivery, child lifecycle POSTs, or replay attachment:
-  Kiro/Pi have none, and no Kimi-specific server behavior is evidenced here.
+- Children are `.kimi-code` `agents/agent-N/wire.jsonl` and `.kimi`
+  `subagents/<agent-id>/wire.jsonl`. Record either set in `SourceMeta` for
+  discovery visibility only. This plan does not add child watermarks, `agentId`
+  delivery, child lifecycle POSTs, or replay attachment: Kiro/Pi have none,
+  and no Kimi-specific server behavior is evidenced here.
 - Parse `profile.bind.environmentDisclosure.cwd`, `modelAlias`, metadata
   `created_at`, and millisecond `time` only as local metadata when present;
   use the same filesystem timestamp fallbacks as Kiro/Pi. Do not let absent or
@@ -210,8 +225,9 @@ a parser/installer under `Harness/Kimi`, and a `plugin install --kimi` path.
    the remaining bytes, reassemble and emit that same physical line exactly
    once.
 3. **Children:** if a supported integration is established, register the
-   observed `subagents/<agent-id>/wire.jsonl` paths as child streams under the
-   root Kimi session. A child must not end the parent.
+   observed `.kimi-code` `agents/agent-N/wire.jsonl` and `.kimi`
+   `subagents/<agent-id>/wire.jsonl` paths as child streams under the root Kimi
+   session. A child must not end the parent.
 4. **End:** use Kimi's documented end callback when available. Otherwise only
    synthesize end after a documented, conservative process-exit/idle rule; do
    not use an arbitrary timer that can close a long-running task.
