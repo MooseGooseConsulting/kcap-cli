@@ -12,10 +12,12 @@ public static class VendorSelection {
         public bool HasError => Error is not null;
     }
 
-    // internal, not private: the driver-schema conformance suite pins its hand-written harness table
-    // against this list, so adding a tenth installable target fails there instead of silently leaving
-    // it uncovered. No enumeration of supported harnesses exists in production code otherwise.
-    internal static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity"];
+    // Installable/live-harness flags only. Historical-only sources must not become
+    // setup nudge, plugin, or hook targets through the harness catalog.
+    internal static readonly string[] KnownHarnessVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity"];
+
+    // Import selection is broader than the live harness catalog.
+    internal static readonly string[] KnownImportVendorFlags = [.. KnownHarnessVendorFlags, "--kimi"];
 
     public static Result Parse(string[] args) {
         var vendors = new HashSet<string>(StringComparer.Ordinal);
@@ -28,6 +30,7 @@ public static class VendorSelection {
                 case "--copilot": vendors.Add("copilot"); break;
                 case "--gemini":  vendors.Add("gemini");  break;
                 case "--kiro":    vendors.Add("kiro");    break;
+                case "--kimi":    vendors.Add("kimi");    break;
                 case "--pi":      vendors.Add("pi");      break;
                 case "--opencode": vendors.Add("opencode"); break;
                 case "--antigravity": vendors.Add("antigravity"); break;
@@ -40,9 +43,9 @@ public static class VendorSelection {
         // transcript path already encodes the workspace.
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
-            if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
+            if (Array.IndexOf(KnownImportVendorFlags, a) >= 0) continue;
 
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-") || a.StartsWith("--pi-") || a.StartsWith("--opencode-") || a.StartsWith("--antigravity-")) {
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-") || a.StartsWith("--kimi-") || a.StartsWith("--pi-") || a.StartsWith("--opencode-") || a.StartsWith("--antigravity-")) {
                 return new(vendors, $"Unknown source option: {a}.");
             }
         }
@@ -50,12 +53,12 @@ public static class VendorSelection {
         // Vendor-typo detection (Damerau-Levenshtein <= 2 against vendor flags).
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
-            if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-") || a.StartsWith("--pi-") || a.StartsWith("--opencode-") || a.StartsWith("--antigravity-")) continue;
+            if (Array.IndexOf(KnownImportVendorFlags, a) >= 0) continue;
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-") || a.StartsWith("--kimi-") || a.StartsWith("--pi-") || a.StartsWith("--opencode-") || a.StartsWith("--antigravity-")) continue;
 
             string? hint = null;
             var bestDist = int.MaxValue;
-            foreach (var v in KnownVendorFlags) {
+            foreach (var v in KnownImportVendorFlags) {
                 var d = DamerauLevenshtein(a, v);
                 if (d < bestDist) { bestDist = d; hint = v; }
             }

@@ -1,6 +1,6 @@
 kcap import — Import local sessions from every detected coding agent
 
-Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, and
+Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, and
 Antigravity sessions on this machine and imports them in a single run. Most agents
 ship a per-session .jsonl transcript (OpenCode is a SQLite db):
   Claude   — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
@@ -10,10 +10,12 @@ ship a per-session .jsonl transcript (OpenCode is a SQLite db):
              history-session-state/ root; dirs without events.jsonl are skipped)
   Gemini   — ~/.gemini/tmp/<project>/chats/session-<ISO>-<shortId>.jsonl
   Kiro     — ~/.kiro/sessions/cli/<sid>.jsonl (+ <sid>.json metadata; honours KIRO_HOME)
+  Kimi     — ~/.kimi-code/sessions/**/session_<sid>/agents/main/wire.jsonl or
+             ~/.kimi/sessions/<group>/<sid>/wire.jsonl (child agent wires are not imported)
   Pi       — ~/.pi/agent/sessions/.../<timestamp>_<sid>.jsonl (badlogic/pi-mono)
   OpenCode — ~/.local/share/opencode/opencode.db (SQLite; sessions + parts tables)
   Antigravity — ~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript_full.jsonl
-kcap walks all nine the same way.
+kcap walks all ten the same way.
 
 Usage: kcap import [vendor-filters] [scope] [options]
 
@@ -28,6 +30,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --copilot               Import GitHub Copilot CLI session transcripts
   --gemini                Import Gemini CLI session transcripts
   --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
+  --kimi                  Import Kimi Code root wire transcripts
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
   --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
   --antigravity           Import Google Antigravity conversations (~/.gemini/antigravity/brain)
@@ -64,7 +67,7 @@ Options:
                           sessions. Titling shells out to your own `claude` /
                           `codex`, once per session, on your subscription — the
                           same opt-out `kcap watch` takes. Sessions are searchable
-                          without a title, and the other seven agents never title
+                          without a title, and the other eight agents never title
                           locally, so this changes nothing for them.
   --generate-summaries    Also generate per-session what's-done summaries
   --reimport              Force OpenCode sessions to re-import even if a local

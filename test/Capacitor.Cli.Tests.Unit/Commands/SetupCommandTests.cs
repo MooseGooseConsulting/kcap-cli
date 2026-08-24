@@ -911,6 +911,13 @@ public class SetupCommandTests {
     /// Isolation fixture for the HandleAsync acceptance tests above. See the comment block
     /// preceding them for what each piece of isolation guards against.
     /// </summary>
+    [Test]
+    public async Task Setup_import_source_list_includes_every_historical_source_including_kimi() {
+        var vendors = SetupCommand.BuildImportSources().Select(s => s.Vendor).ToHashSet(StringComparer.Ordinal);
+        await Assert.That(vendors).Contains("kimi");
+        await Assert.That(vendors.SetEquals(VendorSelection.KnownImportVendorFlags.Select(f => f.TrimStart('-')))).IsTrue();
+    }
+
     sealed class HandleAsyncE2EFixture : IAsyncDisposable {
         readonly TempDir _repoDir;
         readonly TempDir _home;
