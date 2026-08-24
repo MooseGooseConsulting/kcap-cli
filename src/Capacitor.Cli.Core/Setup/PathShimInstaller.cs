@@ -1,4 +1,4 @@
-namespace Capacitor.App.Services;
+namespace Capacitor.Cli.Core.Setup;
 
 public enum ShimPreflight { Installable, AlreadyInstalled, Conflict }
 
@@ -6,9 +6,9 @@ public enum ShimOutcome { Installed, InstalledButNotOnPath, Cancelled, Failed }
 
 public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? SudoFallback);
 
-/// Installs a `/usr/local/bin/kcap` symlink to the resolved CLI so a terminal PATH that omits the
-/// app's own resolution still finds `kcap` (spec §5). Mechanics only — the once-ever offer and
-/// tray-menu wiring live in ShimOfferCoordinator.
+/// Installs a `/usr/local/bin/kcap` symlink to a resolved CLI so a terminal PATH that omits the
+/// CLI's own location still finds `kcap` (spec §5). Mechanics only — the once-ever offer and
+/// tray-menu wiring live in the desktop app's ShimOfferCoordinator.
 public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe probe) {
     public const string Destination = "/usr/local/bin/kcap";
 
@@ -19,7 +19,7 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
 
     // Destination is a parameter (not the Destination constant) so tests drive real filesystem
     // taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
-    internal async Task<ShimResult> InstallAsync(string target, string destination, CancellationToken ct) {
+    public async Task<ShimResult> InstallAsync(string target, string destination, CancellationToken ct) {
         if (!LooksLikeTarget(target))
             return new ShimResult(ShimOutcome.Failed, "CLI path contains a newline or carriage return and cannot be used.", null);
 
@@ -54,14 +54,21 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
     /// alone"): re-run the login-shell PATH probe and only call it Installed when `kcap` actually
     /// resolves — otherwise InstalledButNotOnPath with the same actionable Detail. Forces a FRESH
     /// probe (never the pre-install cached answer, which the offer decision itself already
-    /// consumed and is now stale — the install just changed the filesystem).
+    /// consumed and is now stale — the install just changed the filesystem). An UNKNOWN re-probe
+    /// (both attempts failed/timed out) is not the same as "not on PATH": asserting the PATH's
+    /// contents from a probe that returned nothing would be a guess, so it fails closed to Failed
+    /// with a "could not re-verify" detail instead.
     async Task<ShimResult> ProbeOutcomeAsync(string destination, CancellationToken ct) {
         var onPath = await probe.KcapOnPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
-        return onPath == true
-            ? new ShimResult(ShimOutcome.Installed, null, null)
-            : new ShimResult(ShimOutcome.InstalledButNotOnPath,
+        return onPath switch {
+            true  => new ShimResult(ShimOutcome.Installed, null, null),
+            false => new ShimResult(ShimOutcome.InstalledButNotOnPath,
                 $"kcap was linked at {destination}, but your login shell's PATH doesn't include /usr/local/bin. Add: export PATH=\"/usr/local/bin:$PATH\"",
-                null);
+                null),
+            _     => new ShimResult(ShimOutcome.Failed,
+                $"kcap was linked at {destination}, but the login-shell probe could not re-verify whether it is on your terminal PATH.",
+                null),
+        };
     }
 
     /// lstat taxonomy on `destination`, never following through a foreign link: absent →
@@ -70,7 +77,7 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
     /// LinkTarget/ResolveLinkTarget never follow past the top-level lstat on their own, so a
     /// regular file's LinkTarget is null (not "not a link" vs "absent" — both null) and only
     /// FileInfo.Exists/Directory.Exists distinguish those two afterwards.
-    internal static ShimPreflight Preflight(string destination, string target) {
+    public static ShimPreflight Preflight(string destination, string target) {
         var info = new FileInfo(destination);
 
         if (info.LinkTarget is not null) {

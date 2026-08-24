@@ -778,6 +778,17 @@ A detached (`-d`) start under the same directive separately checks the daemon bi
 
 What it carries over from your shell is a fixed allowlist — `PATH`, `KCAP_PROFILE`, `KCAP_URL`, `KCAP_CONFIG_DIR`, `KCAP_CLAUDE_PATH`, `KCAP_CODEX_PATH`, `KCAP_COPILOT_TOKEN_CMD`, plus the Google/Gemini configuration below — and **nothing else from your environment reaches the service**, credentials included, because the unit file lands on disk. (`install` additionally writes a generated `KCAP_DAEMON_SUPERVISED` marker, so the unit holds one key that did not come from your shell.) Unit files are written owner-only (`0600`). `KCAP_COPILOT_TOKEN_CMD` is on the list precisely because it is a *command* rather than a secret — see [borrowed-context Copilot review](#borrowed-context-copilot-reviews).
 
+#### The command-line tool (`kcap` on your terminal PATH)
+
+If your login shell cannot find `kcap` — hooks then run and record nothing, silently — the Agents screen offers to fix it for you. The fix is a CLI verb, driven by name from the flow (the server→CLI lane carries values, never paths or commands):
+
+```bash
+kcap daemon shim ensure                    # probe; link /usr/local/bin/kcap to this CLI if absent
+kcap daemon shim ensure --json             # machine-readable outcome for the flow
+```
+
+`ensure` probes the *interactive login* shell (`$SHELL -lic`, falling back to `-lc`; `/bin/zsh` when `$SHELL` is unset) and acts on a positive finding only: kcap already resolving → `already_on_path`, exit 0. Positively absent → link `/usr/local/bin/kcap` (macOS only; prompts once for your admin password, non-forcing symlink, then **re-probes** so success is never reported on the symlink alone). For an npm-global install the link points at the npm **launcher** (`kcap.js`) rather than the native binary, so `kcap update` keeps performing the upgrade through npm; a standalone binary is linked directly. An unknown probe (`probe_unknown`), a different filesystem entry already at the destination (`conflict` — never overwritten; re-checked after a failed install so a racing entry still gets the coded row), or a non-macOS platform (`unsupported_platform`, where the osascript-based install does not exist) all fail closed with the coded reason, exit non-zero, and mutate nothing. `--json` emits the outcome plus coded reason (and the actionable `detail`/`sudo_fallback` on `installed_not_on_path`/`failed`); the flow's copy keys off `outcome`, not the exit code. Exit 0 only when the terminal now resolves `kcap`.
+
 #### Hosted Gemini needs its project in the *daemon's* environment
 
 Hosted Gemini agents use whatever credential you logged `gemini` in with — there is no API key to configure. But a Gemini login that is scoped to a Google Cloud project needs that project **where the daemon can see it**, and a supervised daemon sees none of your shell: launchd passes no shell environment, and a non-interactive shell never reads your profile. So `export GOOGLE_CLOUD_PROJECT=…` in `.zshrc` is invisible to it.
