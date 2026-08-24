@@ -9,8 +9,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Harness.Kimi;
 
 /// <summary>
-/// Discovers and imports Kimi Code's root wire streams. Kimi child-agent wires
-/// are retained as discovery metadata only; no historical child delivery exists.
+/// Discovers and imports Kimi Code's root and child-agent wire streams.
 /// </summary>
 internal sealed class KimiImportSource : IImportSource {
     readonly string _home;
@@ -26,7 +25,7 @@ internal sealed class KimiImportSource : IImportSource {
     public string Vendor => "kimi";
     public bool IsAvailable => Directory.Exists(KimiCodeSessions) || Directory.Exists(KimiSessions);
     public bool SupportsTitleGeneration => false;
-    public bool AttachesChildContentOnReplay => false;
+    public bool AttachesChildContentOnReplay => true;
 
     public async Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var sessionFilter = filters.FilterSession is { } sf ? ImportCommand.NormalizeGuid(sf) : null;
@@ -102,10 +101,14 @@ internal sealed class KimiImportSource : IImportSource {
         if (!await PostAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/kimi", start, ct)) return ImportOutcome.Failed;
         var startLine = classification.Status switch { ImportCommand.ClassificationStatus.Partial => classification.ResumeFromLine, ImportCommand.ClassificationStatus.AlreadyLoaded => classification.TotalLines, _ => 0 };
         int sent;
-        try { sent = await SessionImporter.SendTranscriptBatches(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, path, null, startLine, vendor: Vendor); }
+        try { sent = await SessionImporter.SendTranscriptBatches(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, path, null, startLine, vendor: Vendor, failOnError: true); }
         catch { return ImportOutcome.Failed; }
+        // Children must complete before the root's session-end, otherwise their lifecycle events
+        // can appear after the parent has closed. A failed child is retried on the next import;
+        // it does not invalidate root content which was already accepted.
+        var sentChildContent = await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, classification.SourceMeta!, ct);
         if (!await PostAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/kimi", EndPayload(classification.SessionId, cwd, classification.Meta.LastTimestamp), ct)) return ImportOutcome.Failed;
-        return sent == 0 ? (startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped) : (startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded);
+        return new ImportSessionResult(sent == 0 ? (startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped) : (startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded), sentChildContent);
     }
 
     static IEnumerable<RootWire> RootWires(string root, bool kimiCode) {
@@ -131,6 +134,60 @@ internal sealed class KimiImportSource : IImportSource {
         return Directory.Exists(childRoot)
             ? GuardedDiscovery.EnumerateFiles(childRoot, "wire.jsonl").Where(p => !string.Equals(p, rootWire, StringComparison.OrdinalIgnoreCase))
             : [];
+    }
+
+    /// <summary>
+    /// Attaches Kimi's sibling agent wires as subagent streams. The directory name is Kimi's
+    /// stable agent identity in both supported layouts (agents/agent-N and subagents/&lt;id&gt;).
+    /// Per-child watermarks let a rerun repair lifecycle independently without resending a
+    /// complete child stream; strict batch delivery means SentChildContent denotes accepted data.
+    /// </summary>
+    static async Task<bool> ImportChildrenAsync(HttpClient client, string baseUrl, string parentSessionId,
+            IReadOnlyDictionary<string, object?> sourceMeta, CancellationToken ct) {
+        if (!sourceMeta.TryGetValue("ChildTranscriptPaths", out var childPathsObj)
+         || childPathsObj is not string[] { Length: > 0 } childPaths)
+            return false;
+
+        var anyChildContentSent = false;
+        foreach (var childPath in childPaths) {
+            ct.ThrowIfCancellationRequested();
+            if (!File.Exists(childPath)) continue;
+
+            var agentId = Path.GetFileName(Path.GetDirectoryName(childPath)!);
+            if (string.IsNullOrWhiteSpace(agentId) || string.Equals(agentId, "main", StringComparison.OrdinalIgnoreCase)) continue;
+
+            int? childLast;
+            try { (childLast, _) = await ReadTranscriptStatsAsync(childPath, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch { continue; }
+            if (childLast is null) continue;
+
+            int? watermark;
+            try { watermark = await FetchServerLastLineAsync(client, baseUrl, parentSessionId, ct, agentId); }
+            catch (OperationCanceledException) { throw; }
+            catch { continue; }
+
+            if (watermark is { } complete && complete >= childLast.Value) {
+                // Content watermark does not establish that stop was accepted. Strict lifecycle
+                // repair restores the active mark before re-asserting the deterministic stop.
+                if (await PostAsync(client, baseUrl, "subagent-start", SubagentStartPayload(parentSessionId, agentId, childPath, strict: true), ct))
+                    await PostAsync(client, baseUrl, "subagent-stop", SubagentStopPayload(parentSessionId, agentId, childPath, strict: true), ct);
+                continue;
+            }
+
+            if (!await PostAsync(client, baseUrl, "subagent-start", SubagentStartPayload(parentSessionId, agentId, childPath), ct)) continue;
+
+            int childSent;
+            try {
+                childSent = await SessionImporter.SendTranscriptBatches(client, baseUrl, parentSessionId, childPath,
+                    agentId, watermark is { } line ? checked(line + 1) : 0, vendor: "kimi", failOnError: true);
+            } catch (OperationCanceledException) { throw; }
+            catch { continue; }
+
+            if (childSent > 0) anyChildContentSent = true;
+            await PostAsync(client, baseUrl, "subagent-stop", SubagentStopPayload(parentSessionId, agentId, childPath), ct);
+        }
+        return anyChildContentSent;
     }
 
     static async Task<WireInfo> ReadWireInfoAsync(string path, CancellationToken ct) {
@@ -159,10 +216,12 @@ internal sealed class KimiImportSource : IImportSource {
     static string NormalizePath(string p) { try { return Path.GetFullPath(p).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar); } catch { return p.TrimEnd('/','\\'); } }
     static bool PathEquals(string a,string b) => string.Equals(a,b,OperatingSystem.IsWindows()||OperatingSystem.IsMacOS()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal);
     static ImportCommand.SessionClassification Make(DiscoveredSession s, SessionMetadata m, ImportCommand.ClassificationStatus status,int total,string? reason=null) => new(){SessionId=s.SessionId,FilePath="",EncodedCwd="",Meta=m,Status=status,Vendor="kimi",ProbeErrorReason=reason,TotalLines=total,SourceMeta=s.SourceMeta};
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http,string baseUrl,string id,CancellationToken ct) { using var resp=await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{id}/last-line",ct:ct); if(resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)return null; if(!resp.IsSuccessStatusCode)throw new HttpRequestException(); using var doc=JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct)); return doc.RootElement.TryGetProperty("last_line_number",out var n)&&n.ValueKind==JsonValueKind.Number?n.GetInt32():null; }
+    static async Task<int?> FetchServerLastLineAsync(HttpClient http,string baseUrl,string id,CancellationToken ct, string? agentId = null) { var url=$"{baseUrl}/api/sessions/{id}/last-line"+(agentId is null ? "" : $"?agentId={Uri.EscapeDataString(agentId)}"); using var resp=await http.GetWithRetryAsync(url,ct:ct); if(resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent)return null; if(!resp.IsSuccessStatusCode)throw new HttpRequestException(); using var doc=JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct)); return doc.RootElement.TryGetProperty("last_line_number",out var n)&&n.ValueKind==JsonValueKind.Number?n.GetInt32():null; }
     static (string?,string?) ResolveExclusions(string? cwd,string? repo,ClassifyContext ctx) { string? er=null,ep=null; if(repo is not null&&ctx.ExcludedRepos?.Any(x=>string.Equals(x,repo,StringComparison.OrdinalIgnoreCase))==true)er=repo; if(cwd is not null&&ctx.ExcludedPaths is { } paths) foreach(var p in paths) if(PathExclusion.IsExcluded(cwd,[p])) {ep=PathExclusion.Normalize(p);break;} return(er,ep); }
     static JsonObject StartPayload(string id,string? cwd,string? model,DateTimeOffset? started) { var p=new JsonObject{{"hook_event_name","agentSpawn"},{"session_id",id}}; if(cwd is not null)p["cwd"]=cwd; if(cwd is not null&&GitRepository.FindRoot(cwd) is { } root)p["workspace_root"]=root; if(model is not null)p["model"]=model; if(started is { } t)p["started_at"]=t.ToString("O"); p["origin"]=ImportOrigins.Historical; return p; }
     static JsonObject EndPayload(string id,string? cwd,DateTimeOffset? ended) { var p=new JsonObject{{"hook_event_name","sessionEnd"},{"session_id",id},{"reason","historical-import"}};if(cwd is not null)p["cwd"]=cwd;if(ended is { } t)p["ended_at"]=t.ToString("O");p["origin"]=ImportOrigins.Historical;return p; }
+    static JsonObject SubagentStartPayload(string parentSessionId, string agentId, string transcriptPath, bool strict = false) { var p = new JsonObject { ["hook_event_name"]="subagent_start", ["session_id"]=parentSessionId, ["agent_id"]=agentId, ["agent_type"]="subagent", ["transcript_path"]=transcriptPath, ["cwd"]="" }; if (strict) p["strict"]=true; return p; }
+    static JsonObject SubagentStopPayload(string parentSessionId, string agentId, string transcriptPath, bool strict = false) { var p = new JsonObject { ["hook_event_name"]="subagent_stop", ["session_id"]=parentSessionId, ["agent_id"]=agentId, ["agent_type"]="subagent", ["transcript_path"]=transcriptPath, ["cwd"]="", ["stop_hook_active"]=false, ["agent_transcript_path"]=transcriptPath, ["last_assistant_message"]="" }; if (strict) p["strict"]=true; return p; }
     static async Task<bool> PostAsync(HttpClient c,string baseUrl,string route,JsonObject p,CancellationToken ct) { try { using var content=new StringContent(p.ToJsonString(),Encoding.UTF8,"application/json");using var response=await c.PostWithRetryAsync($"{baseUrl}/hooks/{route}",content,ct:ct);return response.IsSuccessStatusCode;}catch{return false;} }
     sealed record RootWire(string Path, string DashedId, bool KimiCode);
     sealed record WireInfo(string? Cwd,string? Model,DateTimeOffset? FirstTimestamp,DateTimeOffset? LastTimestamp);

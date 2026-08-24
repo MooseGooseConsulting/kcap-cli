@@ -157,7 +157,7 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
+kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, Antigravity)
 kcap import --org EventStore    # sessions whose git-remote owner is EventStore
 kcap import --org               # pick an org from your discovered repos (and remember it)
 kcap import --repo owner/repo   # sessions for one specific repo (repeat --repo for several)
@@ -165,6 +165,7 @@ kcap import --cursor            # only Cursor
 kcap import --copilot           # only Copilot
 kcap import --gemini            # only Gemini
 kcap import --kiro              # only Kiro
+kcap import --kimi              # only Kimi Code history
 kcap import --pi                # only Pi (badlogic/pi-mono)
 kcap import --opencode          # only OpenCode
 kcap import --antigravity       # only Antigravity
@@ -178,7 +179,7 @@ kcap import --antigravity       # only Antigravity
 
 > **Codex** collab subagents (Codex CLI 0.146+, the `spawn_agent` collaboration tools) are captured too. Each subagent thread writes its own rollout under `~/.codex/sessions/`; the live watcher discovers children by the parent linkage in their rollout header and streams each one nested under the parent session, and `kcap import --codex` does the same for history — a subagent rollout never imports as a separate top-level session (see [Loading historical sessions](#loading-historical-sessions)).
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), `~/.local/share/opencode/opencode.db` (OpenCode), and both `~/.gemini/antigravity/brain/` (GUI) and `~/.gemini/antigravity-cli/brain/` (the `agy` CLI) (Antigravity) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, `--opencode`, or `--antigravity` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times. Each run ends with `N imported · N skipped · N failed`, then a breakdown of why each session was skipped. Failures never abort the run or change the exit code: everything that could be imported still is, and because the run is idempotent, re-running retries the failures without re-sending anything already on the server.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), both `~/.kimi-code/sessions/` and `~/.kimi/sessions/` (Kimi Code), `~/.pi/agent/sessions/` (Pi), `~/.local/share/opencode/opencode.db` (OpenCode), and both `~/.gemini/antigravity/brain/` (GUI) and `~/.gemini/antigravity-cli/brain/` (the `agy` CLI) (Antigravity) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--kimi`, `--pi`, `--opencode`, or `--antigravity` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times. Each run ends with `N imported · N skipped · N failed`, then a breakdown of why each session was skipped. Failures never abort the run or change the exit code: everything that could be imported still is, and because the run is idempotent, re-running retries the failures without re-sending anything already on the server.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org <owner>` filters by the git-remote owner (GitHub org/user) detected on each session — independent of your profile name, so it behaves identically under GitHub and WorkOS sign-in. A bare `--org` lets you pick an owner from your discovered repos and remembers it for next time. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -640,6 +641,7 @@ kcap import --cursor --cwd /path/to/proj     # only Cursor sessions whose worksp
 kcap import --copilot --all                  # only Copilot — every discovered transcript
 kcap import --gemini --all                   # only Gemini — every discovered transcript
 kcap import --kiro --all                     # only Kiro — every session log under ~/.kiro/sessions/cli
+kcap import --kimi --all                     # only Kimi Code — every root and subagent wire stream
 kcap import --pi --all                       # only Pi — every discovered session
 kcap import --opencode --all                 # only OpenCode — every session in opencode.db
 ```
@@ -647,6 +649,8 @@ kcap import --opencode --all                 # only OpenCode — every session i
 Cursor historical import walks every JSONL transcript under `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and posts each line through the same `POST /hooks/transcript` route the live hook path uses, so live and historical ingest converge on one canonical event stream. The walker resolves each session's working directory by matching its sanitized workspace name against `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json` (on Linux: `~/.config/Cursor/User/...`); sessions whose workspace can't be resolved are still imported, just without `cwd` and git owner/repo enrichment.
 
 Kiro historical import reads each session's append-only log at `~/.kiro/sessions/cli/{id}.jsonl` (plus the sibling `{id}.json` for cwd / model / title) and posts the lines through `POST /hooks/transcript` — the same lines the live watcher tails, so live and historical ingest converge. Set `KIRO_HOME` to point at a non-default location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(session id, message/tool id, kind)`.
+
+Kimi Code historical import reads root wires from `~/.kimi-code/sessions/**/session_<id>/agents/main/wire.jsonl` and `~/.kimi/sessions/<group>/<id>/wire.jsonl`. It attaches the matching Kimi child wires (`agents/agent-N/wire.jsonl` or `subagents/<agent-id>/wire.jsonl`) as subagent streams under that root. This is historical-only support: it does not install a Kimi plugin or hook. Re-imports use the root and per-child watermarks, so completed content is not re-sent and incomplete child lifecycle delivery is repaired.
 
 Codex historical import walks `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Collab subagent rollouts (Codex CLI 0.146+ — the rollout header names the parent thread) are excluded from top-level discovery and imported nested under their parent instead: every transitive descendant (children, grandchildren, and so on, up to a depth of 8) lands as a direct subagent of the top-level root, mirroring the OpenCode import. A rollout whose header can't be read yet (a session actively starting while the import runs) is skipped for that run and picked up by the next one.
 

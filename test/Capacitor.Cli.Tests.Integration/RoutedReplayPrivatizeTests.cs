@@ -1,7 +1,9 @@
 using System.Net;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.Kimi;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -40,10 +42,12 @@ public class RoutedReplayPrivatizeTests : IDisposable {
     readonly TempDir        _tmp        = new();
     readonly string         _agHome;
     readonly string         _geminiHome;
+    readonly string         _kimiHome;
 
     public RoutedReplayPrivatizeTests() {
         _agHome     = _tmp.CreateDir("ag");
         _geminiHome = _tmp.CreateDir("gemini");
+        _kimiHome   = _tmp.CreateDir("kimi");
     }
 
     public void Dispose() {
@@ -185,6 +189,61 @@ public class RoutedReplayPrivatizeTests : IDisposable {
         StubAntigravityAlreadyLoadedWithNewChild();
 
         await Assert.That(await RunAntigravityImport(forcePrivate: false)).IsEqualTo(0);
+
+        await Assert.That(VisibilityPutPaths().Length).IsEqualTo(0);
+    }
+
+    // =====================================================================
+    // Kimi Code — root agents/main/wire.jsonl with sibling agents/agent-N.
+    // =====================================================================
+
+    const string KimiDashedRoot = "7aaa0000-0000-4000-8000-00000000000c";
+    static readonly string KimiRoot = Dashless(KimiDashedRoot);
+
+    void WriteKimiFixture() {
+        _tmp.CreateFile($"kimi/.kimi-code/sessions/wd_synthetic/session_{KimiDashedRoot}/agents/main/wire.jsonl", [
+            """{"type":"metadata","created_at":1760000000000}""",
+            """{"type":"turn.prompt","input":"root","time":1760000001000}""",
+        ]);
+        _tmp.CreateFile($"kimi/.kimi-code/sessions/wd_synthetic/session_{KimiDashedRoot}/agents/agent-1/wire.jsonl", [
+            """{"type":"turn.prompt","input":"child","time":1760000002000}""",
+        ]);
+    }
+
+    void StubKimiAlreadyLoadedWithNewChild() {
+        _server.Given(Request.Create().WithPath($"/api/sessions/{KimiRoot}/last-line").WithParam("agentId", "agent-1").UsingGet())
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.NotFound));
+        _server.Given(Request.Create().WithPath($"/api/sessions/{KimiRoot}/last-line").UsingGet())
+            .AtPriority(5)
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] { "/hooks/session-start/kimi", "/hooks/transcript", "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/kimi" })
+            _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        StubVisibilityPut();
+    }
+
+    Task<int> RunKimiImport(bool forcePrivate) => ImportCommand.HandleImport(
+        baseUrl: _server.Url!, filterCwd: null, minLines: 0,
+        sources: [new KimiImportSource(_kimiHome, _ => Task.FromResult<RepositoryPayload?>(null))],
+        scope: new ImportScope.All(), skipConfirmation: true, forcePrivate: forcePrivate);
+
+    [Test, NotInParallel]
+    public async Task private_run_privatizes_an_already_loaded_kimi_root_that_attached_new_child_content() {
+        WriteKimiFixture();
+        StubKimiAlreadyLoadedWithNewChild();
+
+        await Assert.That(await RunKimiImport(forcePrivate: true)).IsEqualTo(0);
+
+        await Assert.That(VisibilityPutPaths()).Contains($"/api/sessions/{KimiRoot}/visibility");
+        await Assert.That(VisibilityPutBodies().Any(b => b == """{"visibility":"none"}""")).IsTrue();
+    }
+
+    [Test, NotInParallel]
+    public async Task non_private_kimi_replay_never_calls_set_visibility() {
+        WriteKimiFixture();
+        StubKimiAlreadyLoadedWithNewChild();
+
+        await Assert.That(await RunKimiImport(forcePrivate: false)).IsEqualTo(0);
 
         await Assert.That(VisibilityPutPaths().Length).IsEqualTo(0);
     }

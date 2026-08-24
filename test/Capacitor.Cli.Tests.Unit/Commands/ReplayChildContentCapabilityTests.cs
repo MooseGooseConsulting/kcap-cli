@@ -36,6 +36,7 @@ public class ReplayChildContentCapabilityTests {
     [Arguments("cursor")]
     [Arguments("antigravity")]
     [Arguments("gemini")]
+    [Arguments("kimi")]
     public async Task sources_whose_replay_can_attach_child_content_declare_the_capability(string vendor) {
         await Assert.That(MakeSource(vendor).AttachesChildContentOnReplay).IsTrue();
     }
@@ -52,7 +53,6 @@ public class ReplayChildContentCapabilityTests {
     [Arguments("codex")]
     [Arguments("copilot")]
     [Arguments("kiro")]
-    [Arguments("kimi")]
     [Arguments("pi")]
     [Arguments("opencode")]
     public async Task sources_whose_replay_cannot_attach_child_content_do_not_declare_the_capability(string vendor) {

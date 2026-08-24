@@ -68,7 +68,7 @@ public class KimiImportSourceTests {
         var absent = new KimiImportSource(tmp.Path);
         await Assert.That(absent.IsAvailable).IsFalse();
         await Assert.That(absent.SupportsTitleGeneration).IsFalse();
-        await Assert.That(absent.AttachesChildContentOnReplay).IsFalse();
+        await Assert.That(absent.AttachesChildContentOnReplay).IsTrue();
         WriteRoot(tmp, $".kimi/sessions/0123456789abcdef0123456789abcdef/{Sid1}/wire.jsonl");
         await Assert.That(new KimiImportSource(tmp.Path).IsAvailable).IsTrue();
     }
