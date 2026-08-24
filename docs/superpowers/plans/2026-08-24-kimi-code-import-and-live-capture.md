@@ -78,7 +78,9 @@ following are confirmed against an authorized test server by a maintainer.
 
 - [ ] Send a deliberately minimal, synthetic `TranscriptBatch` to **`POST
   /hooks/transcript`** with `vendor=kimi`; confirm the actual ingest route
-  accepts it and selects the intended normalizer. Do not use the read-only
+  accepts it, selects the intended normalizer, and produces an observable
+  normalized artifact. The probe must use strict delivery so a non-2xx response
+  or normalizer failure is not mistaken for success. Do not use the read-only
   `/api/sessions/{id}/transcript` retrieval route as this capability probe.
 - [ ] Confirm the server has a Kimi wire normalizer, or identify an existing
   documented generic wire envelope that the CLI may legitimately emit.
@@ -109,6 +111,7 @@ following are confirmed against an authorized test server by a maintainer.
 
 - `src/Capacitor.Cli.Core/Harness/Kimi/KimiPaths.cs`
 - `src/Capacitor.Cli/Harness/Kimi/KimiWireReader.cs`
+- `src/Capacitor.Cli/Harness/Kimi/KimiTranscriptSender.cs`
 - `src/Capacitor.Cli/Harness/Kimi/KimiImportSource.cs`
 
 **Tests:**
@@ -136,6 +139,11 @@ Implementation requirements:
    skip rules. Blank lines and non-relevant records retain their position in
    the source line number space; malformed/incomplete tail lines must not
    cause a later valid line to be skipped.
+7. Add a Kimi-specific strict sender (or extend the shared sender with an
+   explicit relevance predicate) that streams `(rawLine, physicalIndex)` only
+   for relevant records. `SessionImporter.SendTranscriptBatches` alone is not
+   sufficient: it sends every nonblank line and has only a physical
+   `startLine`, not an import-relevance predicate.
 
 ### 2. Implement `IImportSource`
 
@@ -148,15 +156,17 @@ replay-privacy handling on `GeminiImportSource`/`AntigravityImportSource`.
    source-format version.
 2. Apply `--session`, `--cwd`, and `--since` before classification. `--since`
    uses the source's first Kimi timestamp.
-3. `ClassifyAsync` counts importable physical lines and queries the authorized
-   server watermark for the root and each child stream. Respect excluded repos
-   and paths via existing shared import filtering.
+3. `ClassifyAsync` records display count and `lastImportablePhysicalIndex`
+   separately, then queries the authorized server watermark for the root and
+   each child stream. Resume at `serverHwm + 1` in the original physical index
+   space; never convert an importable-line count into a resume cursor. Respect
+   excluded repos and paths via existing shared import filtering.
 4. `ImportSessionAsync` posts lifecycle start before any transcript batch, then
    root content, then each child stream, then lifecycle end. A failed batch
    prevents the terminal end marker and leaves the session repairable.
-   Transcript delivery is strict: use `SendTranscriptBatches(...,
-   failOnError: true)` or an equivalent Kimi sender for every root and child
-   batch; a non-2xx/transport failure must fail the import before any end POST.
+   Transcript delivery is strict: the Kimi sender must fail on every non-2xx
+   or transport exception for root and child batches; no end POST may follow a
+   failed batch.
 5. Because a replay of an already-loaded root can attach new child content,
    declare `AttachesChildContentOnReplay => true` when child streams are
    supported and add Kimi to `ReplayChildContentCapabilityTests`. This is
@@ -213,6 +223,10 @@ the historical importer must not offer `plugin install --kimi` prematurely.
   partial final lines, and inaccessible paths.
 - [ ] Test the confirmed `IsImportRelevantLine` table separately from raw
   parsing; do not infer it from one local transcript.
+- [ ] Add sparse physical-index tests with blank, metadata, skipped, malformed,
+  and relevant records before and after a root/child watermark. Prove that
+  `lastImportablePhysicalIndex`, display count, and `serverHwm + 1` never
+  collapse into the same unsafe cursor.
 - [ ] Test vendor selection: `--kimi` alone, combined with another vendor, and
   typo diagnostics, plus the revised importer-only/catalog conformance rule.
 - [ ] Use a source-local fixture builder or temporary directory tree rather than
@@ -224,20 +238,20 @@ the historical importer must not offer `plugin install --kimi` prematurely.
 - [ ] Use the existing integration-test HTTP harness to assert lifecycle start
   precedes all transcript batches and end follows successful root/child sends.
 - [ ] Base `KimiImportSourceImportTests` on `WireMockServer` and `TempDir`, as
-  the Pi importer does. Assert the exact root contract: `GET
-  /api/sessions/{id}/last-line`, `POST /hooks/session-start/kimi`, transcript
-  batches with `vendor=kimi`, then `POST /hooks/session-end/kimi`.
-- [ ] When the Phase 0 child contract is confirmed, assert child lifecycle and
-  routing: `subagent-start`, transcript with `agent_id`, `subagent-stop`, and
-  child watermark queries using `?agentId=`.
+  the Pi importer does. After Phase 0, assert the documented root lifecycle,
+  watermark, and transcript contract—not assumed Kimi route names—with strict
+  synthetic-batch delivery and the confirmed `vendor=kimi` payload.
+- [ ] When the Phase 0 child contract is confirmed, assert the documented child
+  lifecycle, routing, and child-watermark payloads; do not assume `agentId`,
+  `subagent-*`, or query-string shapes before the server defines them.
 - [ ] Assert each batch uses the agreed vendor value, session ID, child agent
   ID, physical source line numbers, and no real paths beyond the selected cwd.
 - [ ] Cover new, already-loaded, partial-watermark, root-loaded/child-missing,
   and unknown-vendor-rejection paths.
-- [ ] Inject a batch failure and prove no end marker or success ledger is
+- [ ] Inject a batch failure and prove no end marker or completion state is
   recorded; rerun and prove it resumes. Cover both non-2xx and transport
   exceptions for root and child batches; strict delivery must withhold every
-  end marker/success ledger write.
+  terminal lifecycle write.
 - [ ] Verify `--private` using the existing `ImportVisibilityTests` routed-source
   matrix, and verify child attachment/replay behavior with
   `RoutedPrivatizeMembershipTests`. Add Kimi to
