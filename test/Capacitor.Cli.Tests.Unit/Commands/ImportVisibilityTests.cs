@@ -8,6 +8,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Kimi;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Capacitor.Cli.Tests.Unit.Harness.OpenCode;
@@ -404,6 +405,41 @@ public class ImportVisibilityTests : IDisposable {
         await Assert.That(SessionStartBody("kiro").ContainsKey("default_visibility")).IsFalse();
     }
 
+    // --- Kimi: like Kiro, it has no source-owned force-private stamp. ---
+
+    [Test]
+    public async Task Kimi_new_session_stamps_default_visibility() {
+        StubAllHookEndpoints();
+        var path = WriteTranscript("kimi-new.jsonl");
+        var c = RoutedClassification("kimi-new-1", ImportCommand.ClassificationStatus.New,
+            new() { ["TranscriptPath"] = path });
+        using var client = new HttpClient();
+        await new KimiImportSource().ImportSessionAsync(c, new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public"), CancellationToken.None);
+        await Assert.That(SessionStartBody("kimi")["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
+    }
+
+    [Test]
+    public async Task Kimi_partial_session_omits_default_visibility() {
+        StubAllHookEndpoints();
+        var path = WriteTranscript("kimi-partial.jsonl");
+        var c = RoutedClassification("kimi-partial-1", ImportCommand.ClassificationStatus.Partial,
+            new() { ["TranscriptPath"] = path }, resumeFromLine: 2);
+        using var client = new HttpClient();
+        await new KimiImportSource().ImportSessionAsync(c, new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public"), CancellationToken.None);
+        await Assert.That(SessionStartBody("kimi").ContainsKey("default_visibility")).IsFalse();
+    }
+
+    [Test]
+    public async Task Kimi_forcePrivate_suppresses_default_visibility_with_no_existing_private_stamp() {
+        StubAllHookEndpoints();
+        var path = WriteTranscript("kimi-fp.jsonl");
+        var c = RoutedClassification("kimi-fp-1", ImportCommand.ClassificationStatus.New,
+            new() { ["TranscriptPath"] = path });
+        using var client = new HttpClient();
+        await new KimiImportSource().ImportSessionAsync(c, new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public"), CancellationToken.None);
+        await Assert.That(SessionStartBody("kimi").ContainsKey("default_visibility")).IsFalse();
+    }
+
     // --- Pi: HAS existing forcePrivate "private" stamp — must be preserved unchanged. ---
 
     [Test]
@@ -761,6 +797,9 @@ public class ImportVisibilityTests : IDisposable {
     static RoutedSourceCase KiroCase() =>
         new("kiro", () => new KiroImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: false);
 
+    static RoutedSourceCase KimiCase() =>
+        new("kimi", () => new KimiImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: false);
+
     static RoutedSourceCase PiCase() =>
         new("pi", () => new PiImportSource(), p => new() { ["TranscriptPath"] = p }, OwnPrivateStamp: true);
 
@@ -833,6 +872,9 @@ public class ImportVisibilityTests : IDisposable {
     public async Task Kiro_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(KiroCase());
 
     [Test]
+    public async Task Kimi_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(KimiCase());
+
+    [Test]
     public async Task Pi_already_loaded_session_omits_default_visibility() => await AssertAlreadyLoadedOmitsDefaultVisibility(PiCase());
 
     [Test]
@@ -849,6 +891,9 @@ public class ImportVisibilityTests : IDisposable {
 
     [Test]
     public async Task Kiro_forcePrivate_with_partial_status_omits_default_visibility() => await AssertForcePrivateWithPartialStatusUnchanged(KiroCase());
+
+    [Test]
+    public async Task Kimi_forcePrivate_with_partial_status_omits_default_visibility() => await AssertForcePrivateWithPartialStatusUnchanged(KimiCase());
 
     [Test]
     public async Task Pi_forcePrivate_with_partial_status_keeps_existing_private_stamp() => await AssertForcePrivateWithPartialStatusUnchanged(PiCase());
@@ -870,6 +915,9 @@ public class ImportVisibilityTests : IDisposable {
 
     [Test]
     public async Task Kiro_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(KiroCase());
+
+    [Test]
+    public async Task Kimi_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(KimiCase());
 
     [Test]
     public async Task Pi_new_session_omits_default_visibility_when_null() => await AssertNullDefaultVisibilityOmitsField(PiCase());

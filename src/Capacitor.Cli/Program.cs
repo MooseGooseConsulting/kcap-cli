@@ -15,6 +15,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Kimi;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
@@ -631,6 +632,7 @@ switch (command) {
             new CopilotImportSource(),
             new GeminiImportSource(),
             new KiroImportSource(),
+            new KimiImportSource(),
             new PiImportSource(),
             new OpenCodeImportSource(),
             new AntigravityImportSource(),
