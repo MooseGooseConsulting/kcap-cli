@@ -9,11 +9,13 @@ gate rather than an assumption.
 **Scope:** This plan covers `kurrent-io/kcap-cli`. It deliberately does not
 check in, upload, or reproduce a real user's Kimi transcript in fixtures.
 
-**Architecture:** A `KimiImportSource : IImportSource` discovers the local
-Kimi wire logs, identifies one root stream and zero or more child agent
-streams, and sends server-approved, import-relevant wire lines in the original
-physical line-number space. Model lifecycle and watermark mechanics on Kiro/Pi;
-model routed child-stream and replay-privacy mechanics on Gemini/Antigravity.
+**Architecture:** A `KimiImportSource : IImportSource` follows the existing
+routed-source shape of `KiroImportSource` and `PiImportSource`: discover local
+JSONL, classify it against the existing root `last-line` watermark, then post
+synthetic lifecycle start, transcript batches, and lifecycle end in that order.
+Kimi's only source-topology delta is that a root wire file may have nested
+subagent wire files; their delivery and server identity are deliberately not
+specified by this historical-import plan.
 A future `kcap hook --kimi`
 dispatcher and Kimi plugin/adapter would start the same watcher for active
 sessions. Historical import does not need hooks.
@@ -26,19 +28,21 @@ The following layout was observed locally on Windows; it must be re-probed on
 macOS and Linux before hard-coding path behavior:
 
 ```text
-~/.kimi-code/sessions/
-  wd_<workspace-slug>_<suffix>/
-    session_<dashed-uuid>/
-      agents/
-        main/wire.jsonl
-        agent-0/wire.jsonl
-        agent-1/wire.jsonl
-        ...
+~/.kimi/sessions/
+  <32-lowercase-hex-directory>/
+    <dashed-uuid>/
+      wire.jsonl
+      subagents/
+        <agent-id>/wire.jsonl
 ```
 
-Each `wire.jsonl` is append-only JSONL. The session id is the dashed UUID in
-the `session_...` directory; `main` is the root stream and `agent-N` is a
-child stream. The wire records use Unix epoch **milliseconds** in `time`.
+This is the local Windows layout actually inspected for this plan. The
+`wire.jsonl` directly below the dashed UUID directory is the root stream;
+`subagents/<agent-id>/wire.jsonl` files are child streams. The leading
+32-character directory is an observed grouping level, not the canonical
+session id. Do not replace this evidence with the previously assumed
+`~/.kimi-code/.../session_<uuid>/agents/{main,agent-N}` tree. The wire records
+use Unix epoch **milliseconds** in `time`.
 
 Observed top-level records (field values omitted intentionally):
 
@@ -60,7 +64,7 @@ interpretation.
 
 ### Privacy and fixture rules
 
-- Never add a real `~/.kimi-code` file to the kcap repository or test output.
+- Never add a real `~/.kimi` file to the kcap repository or test output.
 - Build small synthetic fixtures with only invented prompts, paths, command
   names, UUIDs, and timestamps.
 - Test structural variants: no `profile.bind`, malformed line, no `main`,
@@ -70,223 +74,108 @@ interpretation.
 
 ---
 
-## Phase 0 — resolve the server contract before claiming end-to-end support
+## Historical-import evidence boundary
 
-The local importer can be implemented and fully mock-tested without server
-source. A real `vendor=kimi` import cannot be declared working until the
-following are confirmed against an authorized test server by a maintainer.
-
-- [ ] Send a deliberately minimal, synthetic `TranscriptBatch` to **`POST
-  /hooks/transcript`** with `vendor=kimi`; confirm the actual ingest route
-  accepts it, selects the intended normalizer, and produces an observable
-  normalized artifact. The probe must use strict delivery so a non-2xx response
-  or normalizer failure is not mistaken for success. Do not use the read-only
-  `/api/sessions/{id}/transcript` retrieval route as this capability probe.
-- [ ] Confirm the server has a Kimi wire normalizer, or identify an existing
-  documented generic wire envelope that the CLI may legitimately emit.
-- [ ] Confirm session lifecycle endpoints for Kimi (start/end), root and child
-  transcript watermarks, and canonical session/agent identity rules.
-- [ ] Confirm high-water-mark behavior, including which Kimi records are
-  import-relevant, their original physical line numbers, partial resend, and
-  duplicate event identity for append-only Kimi logs.
-- [ ] Confirm whether an unknown vendor is rejected, silently stored without
-  normalization, or normalized generically. Do not ship an importer that
-  silently uploads unusable transcripts.
-
-**Decision gate:**
-
-- If a Kimi normalizer/generic protocol already exists, implement the client
-  against that documented contract.
-- If it does not, keep the PR's parser/discovery tests but do not expose a
-  production `--kimi` import flag until the server-side handoff supplies the
-  contract. Do not relabel Kimi lines as Codex merely to get them accepted.
+This plan records the CLI baseline only. It does not define a Kimi server
+normalizer, a Kimi-specific HTTP route, a child-stream protocol, or a new
+server probe. The implementation must use the same existing routed-import
+surfaces Kiro/Pi use; any unsupported Kimi wire semantics remain an unresolved
+server-owned boundary rather than a CLI invention.
 
 ---
 
 ## Phase 1 — Kimi historical importer (open-source CLI)
 
-### 1. Add source-local path and wire helpers
+### Copy-Kiro/Pi baseline
 
-**New files:**
+Implement one routed `IImportSource`, with a test-only sessions-root override,
+and copy the Kiro/Pi mechanics exactly unless the local Kimi topology makes a
+delta unavoidable:
 
-- `src/Capacitor.Cli.Core/Harness/Kimi/KimiPaths.cs`
-- `src/Capacitor.Cli/Harness/Kimi/KimiWireReader.cs`
-- `src/Capacitor.Cli/Harness/Kimi/KimiTranscriptSender.cs`
-- `src/Capacitor.Cli/Harness/Kimi/KimiImportSource.cs`
+1. `Vendor` is `"kimi"`; `IsAvailable` is `Directory.Exists(root)`;
+   `SupportsTitleGeneration` and `AttachesChildContentOnReplay` are both
+   `false`. Classifications set `FilePath = ""` and `EncodedCwd = ""` so the
+   routed `ImportSessionAsync` path owns the work.
+2. Discover recursively under `~/.kimi/sessions`, but admit only a root
+   `wire.jsonl` located directly below a dashed-UUID directory. Normalize that
+   UUID to the existing dashless session-id form. Store root wire path, cwd,
+   model, and timestamps in `SourceMeta`; apply `--session`, `--cwd`, and
+   `--since` before classification. Read only locally; use synthetic fixtures.
+3. Classify with Kiro/Pi's `ReadTranscriptStatsAsync`: count nonblank records,
+   retain the last nonblank physical index, use the existing root
+   `GET /api/sessions/{id}/last-line` helper, and classify `New`, `Partial`, or
+   `AlreadyLoaded` from that root watermark. A 404/204 means no watermark; any
+   other non-success is `ProbeError`. Preserve Kiro/Pi's repository/path
+   exclusion resolution and probe-error/too-short outcomes.
+4. The import-relevant predicate is not inferred by discovery. Kiro's predicate
+   is `kind` in `Prompt`, `AssistantMessage`, `ToolResults`; Pi's is its
+   normalizer's documented emit set. Kimi has no equivalent evidence in this
+   checkout, so no Kimi-only skip table or custom sender is specified here.
+   The copy baseline sends every nonblank root wire line and retains physical
+   line numbers.
+5. Import in the Kiro/Pi order: `POST /hooks/session-start/kimi`, call
+   `SessionImporter.SendTranscriptBatches` for the root with `agentId: null`,
+   `startLine` of `0`, `ResumeFromLine`, or `TotalLines` for New/Partial/
+   AlreadyLoaded, then `POST /hooks/session-end/kimi`. As in Kiro/Pi,
+   `TotalLines` is the nonblank count even though `startLine` is interpreted in
+   the file's physical-index space; retain that existing behavior rather than
+   silently introducing a Kimi-specific cursor scheme. Start/end payloads use
+   the existing helpers' fields: `hook_event_name`, `session_id`, optional
+   `cwd`, optional `workspace_root`, optional ISO-8601 start/end timestamps,
+   `origin: historical-import`, and an import reason. New sessions add
+   `default_visibility` only when not force-private; a source with no existing
+   force-private behavior omits the field under `--private`, as Kiro does.
+6. Preserve existing sender semantics: `SendTranscriptBatches` reads with
+   `FileShare.ReadWrite`, skips blanks, posts up to 100 raw lines per batch with
+   their physical indexes and `vendor=kimi`, and defaults `failOnError: false`.
+   Therefore non-2xx/`HttpRequestException` transcript failures are swallowed
+   by the shared sender and do not themselves withhold session-end; only an
+   exception escaping the sender, a failed lifecycle POST, or a missing root
+   wire returns `Failed`. The result is `Loaded`/`Resumed` when lines were sent,
+   otherwise `Skipped`/`Resumed` according to `startLine`.
+7. Do not synthesize a title. Kiro's `POST /hooks/set-title` is justified by its
+   sibling metadata title; Pi uses the server fallback. No corresponding Kimi
+   title source has been established here, so use the Pi behavior.
 
-**Tests:**
+### Unavoidable local Kimi deltas
 
-- `test/Capacitor.Cli.Tests.Unit/Harness/Kimi/KimiPathsTests.cs`
-- `test/Capacitor.Cli.Tests.Unit/Harness/Kimi/KimiWireReaderTests.cs`
-- synthetic fixture tree below the appropriate test-fixtures directory
+- Root discovery is recursive because of the observed leading 32-hex grouping
+  directory, and a session root is `<dashed-uuid>/wire.jsonl`, not an
+  `agents/main/wire.jsonl` file.
+- The dashed UUID directory supplies the session identity; the grouping
+  directory does not.
+- `subagents/<agent-id>/wire.jsonl` exists locally. Record the child paths in
+  `SourceMeta` for discovery visibility only. This plan does not add child
+  watermarks, `agentId` delivery, child lifecycle POSTs, or replay attachment:
+  Kiro/Pi have none, and no Kimi-specific server behavior is evidenced here.
+- Parse `profile.bind.environmentDisclosure.cwd`, `modelAlias`, metadata
+  `created_at`, and millisecond `time` only as local metadata when present;
+  use the same filesystem timestamp fallbacks as Kiro/Pi. Do not let absent or
+  malformed metadata prevent a readable root wire from being discovered.
 
-Implementation requirements:
+### Tests to copy
 
-1. Resolve the Kimi root from the platform home directory, with an explicit
-   constructor override for tests. Do not inspect an arbitrary workspace.
-2. Discover only `session_<UUID>/agents/<agent-id>/wire.jsonl` below the Kimi
-   sessions root. Skip traversal errors, symlinks escaping the Kimi root, bad
-   UUIDs, missing `main`, and unreadable files without failing other sessions.
-3. Read only enough initial JSONL to obtain `profile.bind.environmentDisclosure.cwd`,
-   `modelAlias`, and a first timestamp; use `metadata.created_at` and filesystem
-   time only as ordered fallbacks.
-4. Use one, documented canonical session-ID form for both historical and live
-   paths. Pin it in tests after Phase 0 confirms the server's choice.
-5. Make `main` the parent session. Preserve child agent directory names as
-   server child-stream identifiers only after Phase 0 confirms the child route.
-6. Preserve original physical line numbers for every sent event, but define
-   `IsImportRelevantLine` only from the confirmed server normalizer emission/
-   skip rules. Blank lines and non-relevant records retain their position in
-   the source line number space; malformed/incomplete tail lines must not
-   cause a later valid line to be skipped.
-7. Add a Kimi-specific strict sender (or extend the shared sender with an
-   explicit relevance predicate) that streams `(rawLine, physicalIndex)` only
-   for relevant records. `SessionImporter.SendTranscriptBatches` alone is not
-   sufficient: it sends every nonblank line and has only a physical
-   `startLine`, not an import-relevance predicate.
+- Copy `KiroImportSourceTests` for UUID discovery, sibling/local metadata, and
+  the import-relevance table; copy `PiImportSourceTests.WriteSession` and its
+  recursive discovery, invalid-file, UUID fallback, filter, availability, and
+  title-capability coverage for the Kimi root tree.
+- Copy `PiImportSourceImportTests`' `WireMockServer`, `TempDir`,
+  `WriteSessionFile`, and New/Partial/AlreadyLoaded routed lifecycle tests.
+  Assert the Kiro/Pi route order and the `vendor=kimi` transcript field, not a
+  newly invented protocol.
+- Add Kimi to `ImportVisibilityTests` through `RoutedSourceCase`,
+  `StubAllHookEndpoints`, `RoutedClassification`, and `SessionStartBody` with
+  `OwnPrivateStamp: false`; copy Kiro's three visibility cases.
+- Add Kimi to the false set in `ReplayChildContentCapabilityTests` and to its
+  exhaustive source list. The flag changes only if an implementation later
+  adds a proven replay child-delivery pass.
 
-### 2. Implement `IImportSource`
+### Registration boundary
 
-Model lifecycle ordering and root watermark handling on `KiroImportSource`/
-`PiImportSource`; model child-stream routing, child watermarks, and
-replay-privacy handling on `GeminiImportSource`/`AntigravityImportSource`.
-
-1. `DiscoverAsync` returns root sessions with Kimi-specific `SourceMeta`:
-   root wire path, child wire paths, cwd, model, start/end estimates, and
-   source-format version.
-2. Apply `--session`, `--cwd`, and `--since` before classification. `--since`
-   uses the source's first Kimi timestamp.
-3. `ClassifyAsync` records display count and `lastImportablePhysicalIndex`
-   separately, then queries the authorized server watermark for the root and
-   each child stream. Resume at `serverHwm + 1` in the original physical index
-   space; never convert an importable-line count into a resume cursor. Respect
-   excluded repos and paths via existing shared import filtering.
-4. `ImportSessionAsync` posts lifecycle start before any transcript batch, then
-   root content, then each child stream, then lifecycle end. A failed batch
-   prevents the terminal end marker and leaves the session repairable.
-   Transcript delivery is strict: the Kimi sender must fail on every non-2xx
-   or transport exception for root and child batches; no end POST may follow a
-   failed batch.
-5. Because a replay of an already-loaded root can attach new child content,
-   declare `AttachesChildContentOnReplay => true` when child streams are
-   supported and add Kimi to `ReplayChildContentCapabilityTests`. This is
-   required for `--private` to privatize child content even if the root replay
-   reports `Skipped`.
-6. Mark Kimi title generation unsupported initially; do not shell out to a
-   model merely to invent a title. Revisit only if the normalizer/server defines
-   a canonical Kimi title path.
-
-### 3. Register the importer only after Phase 0 passes
-
-Do not register or advertise `--kimi` while the closed-server contract is
-unknown. First land source-local parsing/tests if useful, then register the
-production import command only after the synthetic `POST /hooks/transcript`
-probe proves Kimi is accepted and normalized.
-
-**Conditional registration modifications:**
-
-- `src/Capacitor.Cli/Commands/VendorSelection.cs` — recognize `--kimi`.
-- `src/Capacitor.Cli/Program.cs` and `SetupCommand.cs` — construct the source.
-- `src/Capacitor.Cli.Core/Resources/help-import.txt` and relevant usage/help
-  resources — accurately list Kimi as *historical import* support.
-
-**Required importer-only selection contract:**
-
-1. Keep the existing harness flag set exactly matched to `HarnessCatalog.All`;
-   it remains the source of truth for installable/live harnesses.
-2. Add a separate, explicitly named import-vendor flag set used only by
-   `kcap import` selection. It may include Kimi after Phase 0; it must not be
-   consumed by `harness`, `status`, `setup` nudges, or plugin commands.
-3. Update `HarnessCatalogConformanceTests` to retain the exact live-harness
-   assertion, and add a separate import-selection conformance test that checks
-   every import flag resolves to one registered `IImportSource`.
-4. Do not silently accept `--kimi` before it is registered: it must be an
-   unknown vendor until the Phase 0 gate is satisfied.
-
-Do **not** add Kimi to `HarnessCatalog`, `plugin install`, or the status setup
-nudges in this phase unless Phase 2 provides an actual installable live adapter.
-If current conformance assumes every importer is installable, refactor that
-assumption rather than presenting an unavailable Kimi plugin to users.
-Keep `PluginCommand`'s exclusive target flags unchanged until the live-hook PR;
-the historical importer must not offer `plugin install --kimi` prematurely.
-
----
-
-## Phase 1 verification
-
-### Fast, local tests (no server and no Kimi account)
-
-- [ ] Unit-test `KimiPaths` on Windows path shapes and home overrides.
-- [ ] Unit-test each observed event's metadata extraction and timestamp
-  conversion with sanitized JSONL.
-- [ ] Test root/child discovery, filters, malformed lines, empty streams,
-  partial final lines, and inaccessible paths.
-- [ ] Test the confirmed `IsImportRelevantLine` table separately from raw
-  parsing; do not infer it from one local transcript.
-- [ ] Add sparse physical-index tests with blank, metadata, skipped, malformed,
-  and relevant records before and after a root/child watermark. Prove that
-  `lastImportablePhysicalIndex`, display count, and `serverHwm + 1` never
-  collapse into the same unsafe cursor.
-- [ ] Test vendor selection: `--kimi` alone, combined with another vendor, and
-  typo diagnostics, plus the revised importer-only/catalog conformance rule.
-- [ ] Use a source-local fixture builder or temporary directory tree rather than
-  the real Kimi profile; assert discovery makes no network call and writes no
-  transcript content to stdout.
-
-### HTTP contract tests (mock server only)
-
-- [ ] Use the existing integration-test HTTP harness to assert lifecycle start
-  precedes all transcript batches and end follows successful root/child sends.
-- [ ] Base `KimiImportSourceImportTests` on `WireMockServer` and `TempDir`, as
-  the Pi importer does. After Phase 0, assert the documented root lifecycle,
-  watermark, and transcript contract—not assumed Kimi route names—with strict
-  synthetic-batch delivery and the confirmed `vendor=kimi` payload.
-- [ ] When the Phase 0 child contract is confirmed, assert the documented child
-  lifecycle, routing, and child-watermark payloads; do not assume `agentId`,
-  `subagent-*`, or query-string shapes before the server defines them.
-- [ ] Assert each batch uses the agreed vendor value, session ID, child agent
-  ID, physical source line numbers, and no real paths beyond the selected cwd.
-- [ ] Cover new, already-loaded, partial-watermark, root-loaded/child-missing,
-  and unknown-vendor-rejection paths.
-- [ ] Inject a batch failure and prove no end marker or completion state is
-  recorded; rerun and prove it resumes. Cover both non-2xx and transport
-  exceptions for root and child batches; strict delivery must withhold every
-  terminal lifecycle write.
-- [ ] Verify `--private` using the existing `ImportVisibilityTests` routed-source
-  matrix, and verify child attachment/replay behavior with
-  `RoutedPrivatizeMembershipTests`. Add Kimi to
-  `ReplayChildContentCapabilityTests`; verify exclusions cover both parent and
-  child streams.
-
-### Independent harness-and-tool-pattern review (required before a live test)
-
-- [ ] Have a separate reviewer/agent inspect the completed implementation
-  against `KiroImportSource`, `PiImportSource`, `GeminiImportSource`, and
-  `AntigravityImportSource`, rather than relying only on the implementer's
-  interpretation of the plan.
-- [ ] Confirm routed-source conventions: `FilePath = ""`, construction in both
-  `Program.cs` and `SetupCommand.cs`, shared source selection, source-local
-  temporary roots, lifecycle ordering, and child `SentChildContent` behavior.
-- [ ] Run the repository's focused importer tests, relevant visibility tests,
-  the full unit suite, build, and NativeAOT publish. The reviewer records the
-  exact commands and outcomes in the PR.
-
-### Authorized live smoke (closed-server dependency; only after all above pass)
-
-- [ ] First perform a read-only local schema probe of one deliberately
-  non-sensitive Kimi session (copy/parse only, no upload) and record only its
-  event/path schema. Then use synthetic fixtures for deterministic tests.
-- [ ] Obtain maintainer authorization for a test tenant and confirmation that
-  the server accepts/normalizes Kimi; renew authentication only then. Do not
-  place a token in fixtures or logs.
-- [ ] Create one deliberately non-sensitive Kimi session in a disposable test
-  repository and import with `--private`.
-- [ ] Verify in kcap that the session is readable, Kimi-labeled, mapped to the
-  correct repository/cwd, has prompt/message/tool records, and has no duplicate
-  events after a second import.
-- [ ] Test one child-agent session, interruption during import, then a repair
-  import after restart.
-- [ ] Record the exact CLI/server versions and server response in the PR.
+Register the source only in historical-import selection (`Program.cs` and the
+import-vendor selection/help path). Do not add Kimi to `HarnessCatalog`, setup
+nudges, plugin installation, or `kcap hook --kimi`; those are live-integration
+surfaces and remain a separate phase.
 
 ---
 
@@ -297,7 +186,7 @@ exposes a stable callback/plugin configuration surface. The observed
 `plugin.session_start` wire record is evidence of an event, not proof that a
 shell hook can be registered.
 
-### Discovery/probe task
+### Separate live-integration discovery
 
 - [ ] Consult Kimi's official plugin/hook documentation and inspect the locally
   installed Kimi configuration format. Record the exact supported callbacks,
@@ -320,7 +209,8 @@ a parser/installer under `Harness/Kimi`, and a `plugin install --kimi` path.
    record without posting it or advancing the durable cursor; when Kimi appends
    the remaining bytes, reassemble and emit that same physical line exactly
    once.
-3. **Children:** register every `agent-N` wire path as a child stream under the
+3. **Children:** if a supported integration is established, register the
+   observed `subagents/<agent-id>/wire.jsonl` paths as child streams under the
    root Kimi session. A child must not end the parent.
 4. **End:** use Kimi's documented end callback when available. Otherwise only
    synthesize end after a documented, conservative process-exit/idle rule; do
@@ -367,8 +257,8 @@ Before opening the PR:
 
 - [ ] Rebase/merge the current upstream `main` and run the focused tests,
   complete unit suite required by the repository, build, and NativeAOT publish.
-- [ ] Include fixture provenance (synthetic), OS/runtime used, and all Phase 0
-  server-contract answers.
+- [ ] Include fixture provenance (synthetic), OS/runtime used, and the
+  documented evidence supporting any server-side Kimi behavior.
 - [ ] State clearly whether the PR is importer-only or includes a certified
   live Kimi integration. Do not open it as a draft once the checks pass.
 - [ ] Keep live hooks in a follow-up PR unless the historical importer and
