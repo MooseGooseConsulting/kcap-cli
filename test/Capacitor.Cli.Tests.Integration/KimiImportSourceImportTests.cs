@@ -101,6 +101,8 @@ public class KimiImportSourceImportTests : IDisposable {
         await Assert.That(result.SentChildContent).IsTrue();
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").Select(e => e.RequestMessage.Path).ToList();
         await Assert.That(posts).IsEquivalentTo(["/hooks/session-start/kimi", "/hooks/transcript", "/hooks/subagent-start", "/hooks/transcript", "/hooks/subagent-stop", "/hooks/session-end/kimi"]);
+        await Assert.That(posts.IndexOf("/hooks/session-start/kimi")).IsLessThan(posts.IndexOf("/hooks/transcript"));
+        await Assert.That(posts.IndexOf("/hooks/transcript")).IsLessThan(posts.IndexOf("/hooks/subagent-start"));
         await Assert.That(posts.IndexOf("/hooks/subagent-start")).IsLessThan(posts.IndexOf("/hooks/subagent-stop"));
         await Assert.That(posts.LastIndexOf("/hooks/subagent-stop")).IsLessThan(posts.IndexOf("/hooks/session-end/kimi"));
         var childStart = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-start").RequestMessage.Body!;
@@ -180,5 +182,62 @@ public class KimiImportSourceImportTests : IDisposable {
         await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
         await Assert.That(posts.Contains("/hooks/subagent-stop")).IsFalse();
         await Assert.That(posts.Contains("/hooks/session-end/kimi")).IsTrue();
+
+        // A re-run starts the child again and sends the previously rejected content. The root
+        // classification is intentionally reused: this exercises the child retry independently
+        // of the root's watermark classification.
+        _server.Reset();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet()).RespondWith(Response.Create().WithStatusCode(404));
+        StubLifecycle();
+        foreach (var route in new[] { "/hooks/subagent-start", "/hooks/subagent-stop" })
+            _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        var retry = await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, false), CancellationToken.None);
+        await Assert.That(retry.SentChildContent).IsTrue();
+        var retryPosts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(retryPosts.Contains("/hooks/subagent-start")).IsTrue();
+        await Assert.That(retryPosts.Contains("/hooks/subagent-stop")).IsTrue();
+    }
+
+    [Test]
+    public async Task ImportSession_resumes_a_partial_child_from_its_own_watermark() {
+        var home = WriteSession(childAgentId: "agent-4");
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", "agent-4").UsingGet())
+            .AtPriority(1).RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        StubLifecycle();
+        foreach (var route in new[] { "/hooks/subagent-start", "/hooks/subagent-stop" })
+            _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+        var source = new KimiImportSource(home, _ => Task.FromResult<RepositoryPayload?>(null));
+        var classified = await source.ClassifyAsync(await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None),
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+        var result = await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, false), CancellationToken.None);
+
+        await Assert.That(result.SentChildContent).IsTrue();
+        await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Url!.Contains("agentId=agent-4", StringComparison.Ordinal))).IsTrue();
+        var childBatch = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/transcript")
+            .Select(e => e.RequestMessage.Body!).Single(body => body.Contains("\"agent_id\":\"agent-4\""));
+        await Assert.That(childBatch).Contains("\"line_numbers\":[1]");
+    }
+
+    [Test]
+    public async Task ImportSession_does_not_finalize_when_a_strict_root_batch_is_rejected() {
+        var home = WriteSession();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet()).RespondWith(Response.Create().WithStatusCode(404));
+        StubLifecycle();
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .AtPriority(1).RespondWith(Response.Create().WithStatusCode(500));
+
+        using var client = new HttpClient();
+        var source = new KimiImportSource(home, _ => Task.FromResult<RepositoryPayload?>(null));
+        var classified = await source.ClassifyAsync(await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None),
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+        var result = await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Path == "/hooks/session-end/kimi")).IsFalse();
     }
 }

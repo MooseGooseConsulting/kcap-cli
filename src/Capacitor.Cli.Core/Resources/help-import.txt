@@ -11,7 +11,7 @@ ship a per-session .jsonl transcript (OpenCode is a SQLite db):
   Gemini   — ~/.gemini/tmp/<project>/chats/session-<ISO>-<shortId>.jsonl
   Kiro     — ~/.kiro/sessions/cli/<sid>.jsonl (+ <sid>.json metadata; honours KIRO_HOME)
   Kimi     — ~/.kimi-code/sessions/**/session_<sid>/agents/main/wire.jsonl or
-             ~/.kimi/sessions/<group>/<sid>/wire.jsonl (child agent wires are not imported)
+             ~/.kimi/sessions/<group>/<sid>/wire.jsonl (child wires import as subagent streams)
   Pi       — ~/.pi/agent/sessions/.../<timestamp>_<sid>.jsonl (badlogic/pi-mono)
   OpenCode — ~/.local/share/opencode/opencode.db (SQLite; sessions + parts tables)
   Antigravity — ~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript_full.jsonl
@@ -30,7 +30,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --copilot               Import GitHub Copilot CLI session transcripts
   --gemini                Import Gemini CLI session transcripts
   --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
-  --kimi                  Import Kimi Code root wire transcripts
+  --kimi                  Import Kimi Code root and child wire transcripts
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
   --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
   --antigravity           Import Google Antigravity conversations (~/.gemini/antigravity/brain)
