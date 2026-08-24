@@ -316,7 +316,10 @@ a parser/installer under `Harness/Kimi`, and a `plugin install --kimi` path.
 2. **Streaming:** tail exact appended physical lines, including content/tool
    loop events, preserving the same line numbers used by historical import.
    Use the existing durable hook/transcript spool so temporary auth/network
-   failures retry rather than dropping events.
+   failures retry rather than dropping events. Buffer an incomplete final JSONL
+   record without posting it or advancing the durable cursor; when Kimi appends
+   the remaining bytes, reassemble and emit that same physical line exactly
+   once.
 3. **Children:** register every `agent-N` wire path as a child stream under the
    root Kimi session. A child must not end the parent.
 4. **End:** use Kimi's documented end callback when available. Otherwise only
@@ -332,8 +335,14 @@ a parser/installer under `Harness/Kimi`, and a `plugin install --kimi` path.
   user config preservation, and platform path quoting.
 - [ ] Hook tests: start deduplication, start-before-first-line race, child
   routing, reconnect/retry, end sequencing, expired token, and disabled repo.
+- [ ] Append half of a synthetic JSONL record, poll/retry, then append its
+  remainder plus another record. Prove the watcher posts no malformed partial
+  payload, advances no cursor over the partial record, emits each physical
+  index once after completion, and retains those guarantees across an
+  intervening network failure.
 - [ ] End-to-end local test: append synthetic lines while watcher runs and
-  compare streamed output with historical-import output for the same fixture.
+  compare streamed output with historical-import output for the same fixture,
+  including the split-final-line case.
 - [ ] Authorized Kimi smoke: one root session plus a child, restart kcap during
   the session, then verify no loss or duplication server-side.
 
