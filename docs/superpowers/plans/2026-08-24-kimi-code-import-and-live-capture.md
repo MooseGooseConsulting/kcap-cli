@@ -9,10 +9,12 @@ gate rather than an assumption.
 **Scope:** This plan covers `kurrent-io/kcap-cli`. It deliberately does not
 check in, upload, or reproduce a real user's Kimi transcript in fixtures.
 
-**Architecture:** A `KimiImportSource : IImportSource`, modeled on the routed
-Kiro/Pi importers, discovers the local Kimi wire logs, identifies one root
-stream and zero or more child agent streams, and sends server-approved,
-import-relevant wire lines in the original physical line-number space. A future `kcap hook --kimi`
+**Architecture:** A `KimiImportSource : IImportSource` discovers the local
+Kimi wire logs, identifies one root stream and zero or more child agent
+streams, and sends server-approved, import-relevant wire lines in the original
+physical line-number space. Model lifecycle and watermark mechanics on Kiro/Pi;
+model routed child-stream and replay-privacy mechanics on Gemini/Antigravity.
+A future `kcap hook --kimi`
 dispatcher and Kimi plugin/adapter would start the same watcher for active
 sessions. Historical import does not need hooks.
 
@@ -74,7 +76,10 @@ The local importer can be implemented and fully mock-tested without server
 source. A real `vendor=kimi` import cannot be declared working until the
 following are confirmed against an authorized test server by a maintainer.
 
-- [ ] Confirm whether `/api/sessions/{id}/transcript` accepts `vendor=kimi`.
+- [ ] Send a deliberately minimal, synthetic `TranscriptBatch` to **`POST
+  /hooks/transcript`** with `vendor=kimi`; confirm the actual ingest route
+  accepts it and selects the intended normalizer. Do not use the read-only
+  `/api/sessions/{id}/transcript` retrieval route as this capability probe.
 - [ ] Confirm the server has a Kimi wire normalizer, or identify an existing
   documented generic wire envelope that the CLI may legitimately emit.
 - [ ] Confirm session lifecycle endpoints for Kimi (start/end), root and child
@@ -134,8 +139,9 @@ Implementation requirements:
 
 ### 2. Implement `IImportSource`
 
-Model the source on `KiroImportSource` for lifecycle ordering and `Gemini`/
-`Antigravity` for child-stream ordering.
+Model lifecycle ordering and root watermark handling on `KiroImportSource`/
+`PiImportSource`; model child-stream routing, child watermarks, and
+replay-privacy handling on `GeminiImportSource`/`AntigravityImportSource`.
 
 1. `DiscoverAsync` returns root sessions with Kimi-specific `SourceMeta`:
    root wire path, child wire paths, cwd, model, start/end estimates, and
@@ -148,20 +154,44 @@ Model the source on `KiroImportSource` for lifecycle ordering and `Gemini`/
 4. `ImportSessionAsync` posts lifecycle start before any transcript batch, then
    root content, then each child stream, then lifecycle end. A failed batch
    prevents the terminal end marker and leaves the session repairable.
-5. Mark Kimi title generation unsupported initially; do not shell out to a
+   Transcript delivery is strict: use `SendTranscriptBatches(...,
+   failOnError: true)` or an equivalent Kimi sender for every root and child
+   batch; a non-2xx/transport failure must fail the import before any end POST.
+5. Because a replay of an already-loaded root can attach new child content,
+   declare `AttachesChildContentOnReplay => true` when child streams are
+   supported and add Kimi to `ReplayChildContentCapabilityTests`. This is
+   required for `--private` to privatize child content even if the root replay
+   reports `Skipped`.
+6. Mark Kimi title generation unsupported initially; do not shell out to a
    model merely to invent a title. Revisit only if the normalizer/server defines
    a canonical Kimi title path.
 
-### 3. Register the importer without falsely advertising live setup
+### 3. Register the importer only after Phase 0 passes
 
-**Likely modifications:**
+Do not register or advertise `--kimi` while the closed-server contract is
+unknown. First land source-local parsing/tests if useful, then register the
+production import command only after the synthetic `POST /hooks/transcript`
+probe proves Kimi is accepted and normalized.
+
+**Conditional registration modifications:**
 
 - `src/Capacitor.Cli/Commands/VendorSelection.cs` — recognize `--kimi`.
 - `src/Capacitor.Cli/Program.cs` and `SetupCommand.cs` — construct the source.
 - `src/Capacitor.Cli.Core/Resources/help-import.txt` and relevant usage/help
   resources — accurately list Kimi as *historical import* support.
-- `test/Capacitor.Cli.Tests.Unit/HarnessCatalogConformanceTests.cs` — extend or
-  deliberately separate importer-only vendors from installable harnesses.
+
+**Required importer-only selection contract:**
+
+1. Keep the existing harness flag set exactly matched to `HarnessCatalog.All`;
+   it remains the source of truth for installable/live harnesses.
+2. Add a separate, explicitly named import-vendor flag set used only by
+   `kcap import` selection. It may include Kimi after Phase 0; it must not be
+   consumed by `harness`, `status`, `setup` nudges, or plugin commands.
+3. Update `HarnessCatalogConformanceTests` to retain the exact live-harness
+   assertion, and add a separate import-selection conformance test that checks
+   every import flag resolves to one registered `IImportSource`.
+4. Do not silently accept `--kimi` before it is registered: it must be an
+   unknown vendor until the Phase 0 gate is satisfied.
 
 Do **not** add Kimi to `HarnessCatalog`, `plugin install`, or the status setup
 nudges in this phase unless Phase 2 provides an actual installable live adapter.
@@ -205,11 +235,14 @@ the historical importer must not offer `plugin install --kimi` prematurely.
 - [ ] Cover new, already-loaded, partial-watermark, root-loaded/child-missing,
   and unknown-vendor-rejection paths.
 - [ ] Inject a batch failure and prove no end marker or success ledger is
-  recorded; rerun and prove it resumes.
+  recorded; rerun and prove it resumes. Cover both non-2xx and transport
+  exceptions for root and child batches; strict delivery must withhold every
+  end marker/success ledger write.
 - [ ] Verify `--private` using the existing `ImportVisibilityTests` routed-source
   matrix, and verify child attachment/replay behavior with
-  `RoutedPrivatizeMembershipTests` when appropriate. Verify exclusions cover
-  both parent and child streams.
+  `RoutedPrivatizeMembershipTests`. Add Kimi to
+  `ReplayChildContentCapabilityTests`; verify exclusions cover both parent and
+  child streams.
 
 ### Independent harness-and-tool-pattern review (required before a live test)
 
@@ -325,3 +358,12 @@ Before opening the PR:
 3. `feat: import Kimi Code session history` (source, registration, HTTP tests,
    help text).
 4. `feat: capture live Kimi Code sessions` (only after Phase 2 validation).
+
+## Documentation lifecycle
+
+This is an unexecuted implementation plan and remains in
+`docs/superpowers/plans/` for review. Before implementation begins, promote
+the approved architecture and closed-server contract to a dated design in
+`docs/superpowers/specs/`. Once the work is executed, record the delivered
+behavior and validation evidence in `docs/CHANGES.md`, then remove this
+execution plan rather than letting it become stale documentation.
