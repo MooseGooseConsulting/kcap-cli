@@ -4,11 +4,17 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using DynamicData;
 using DynamicData.Binding;
 using ReactiveUI;
 
 namespace Capacitor.App.ViewModels;
+
+/// One entry of the repository chip's menu. Vendor is the remembered harness for RepoPath, or
+/// HomeViewModel.DefaultVendor when none was ever chosen there; Selected marks the entry that
+/// matches SelectedRepoPath under HomeViewModel's own path comparison.
+public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selected);
 
 /// The Home tab's view-model: repository + harness picker, a free-text goal, and
 /// the Start action that launches a session through ILaunchClient. Constructed once, like
@@ -33,6 +39,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     readonly IDaemonClientService _daemon;
     readonly IAppStateStore _state;
     readonly ILaunchClient _launch;
+    readonly Func<Task<string[]>> _knownRepos;
     readonly CompositeDisposable _disposables = new();
 
     string _selectedRepoPath = ScratchRepoPath;
@@ -84,12 +91,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
     /// shutdown, so an in-flight hub invoke holding no token races that teardown.
     readonly CancellationToken _shutdown;
 
+    /// knownRepos is RepoPathStore.GetSortedPathsAsync in production — the same persisted list
+    /// DaemonConnect.RepoPaths feeds the server's launch dialog. Required (no defaulted overload)
+    /// so a test can never silently read the developer's own ~/.config/kcap/repos.json.
     public HomeViewModel(
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
-            CancellationToken shutdown = default) {
+            Func<Task<string[]>> knownRepos, CancellationToken shutdown = default) {
         _daemon = daemon;
         _state = state;
         _launch = launch;
+        _knownRepos = knownRepos;
         _shutdown = shutdown;
 
         // Never starts empty: a null SupportedVendors means "daemon
@@ -131,6 +142,47 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable {
 
         var repoPath = SelectedRepoPath;
         await _state.UpdateAsync(s => s with { HarnessByRepo = WithEntry(s.HarnessByRepo, repoPath, vendor) });
+    }
+
+    /// The repository chip's menu, assembled per open rather than kept as a live projection — the
+    /// flyout is transient, so reading at click time is always fresh with no extra subscription.
+    /// Sources: remembered HarnessByRepo keys, distinct agent RepoPaths, the daemon's persisted
+    /// known repos (what the server's launch dialog sees), and the current selection (a
+    /// picker-added repo with no remembered harness and no agent yet lives nowhere else).
+    /// Deduped under PathComparer with remembered keys added first, so where two casings are one
+    /// repository the casing the user picked is the one displayed. Scratch is always last; the
+    /// view renders it separated.
+    public async Task<IReadOnlyList<RepositoryOption>> ListRepositoriesAsync() {
+        var byRepo = (await _state.LoadAsync()).HarnessByRepo;
+        var known = await _knownRepos();
+
+        var seen = new HashSet<string>(PathComparer);
+        var paths = new List<string>();
+        void Add(string? path) {
+            if (!string.IsNullOrEmpty(path) && seen.Add(path)) paths.Add(path);
+        }
+
+        foreach (var key in byRepo?.Keys ?? [])
+            Add(key);
+        // An agent's RepoPath can be a worktree checkout (review flows launch into the
+        // requester's worktree) — the menu offers the repository, never the checkout (GH #655).
+        foreach (var agent in _daemon.Agents.Items)
+            if (agent.RepoPath is { Length: > 0 } repoPath)
+                Add(GitRepository.ResolveMainRepoRoot(repoPath));
+        foreach (var repo in known)
+            Add(repo);
+        Add(SelectedRepoPath);
+
+        var selected = SelectedRepoPath;
+        var options = paths
+            .OrderBy(p => RepoLabel.Leaf(p), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p, StringComparer.Ordinal)
+            .Select(p => new RepositoryOption(p, Lookup(byRepo, p) ?? DefaultVendor, PathComparer.Equals(p, selected)))
+            .ToList();
+
+        options.Add(new RepositoryOption(
+            ScratchRepoPath, Lookup(byRepo, ScratchRepoPath) ?? DefaultVendor, selected.Length == 0));
+        return options;
     }
 
     /// Sets the repository and restores that repository's remembered harness, or DefaultVendor
