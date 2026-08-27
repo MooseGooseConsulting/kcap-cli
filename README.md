@@ -7,7 +7,7 @@
 [![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#1-install-the-cli)
 [![built with](https://img.shields.io/badge/.NET%2010-NativeAOT-512bd4?logo=dotnet&logoColor=white)](#)
 
-**Kurrent Capacitor** (`kcap`) records your coding-agent sessions and forwards them to a Capacitor server, where a real-time dashboard and PR-review tools surface the context no diff can give you: *why* code changed, what alternatives were weighed, and how it was actually built. It works across nine agents — Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Pi, OpenCode, and Antigravity — capturing the full picture: session lifecycle, transcripts, subagent trees, tool calls, and token usage.
+**Kurrent Capacitor** (`kcap`) records your coding-agent sessions and forwards them to a Capacitor server, where a real-time dashboard and PR-review tools surface the context no diff can give you: *why* code changed, what alternatives were weighed, and how it was actually built. It works across ten agents — Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Kimi Code, Pi, OpenCode, and Antigravity — capturing the full picture: session lifecycle, transcripts, subagent trees, tool calls, and token usage.
 
 ## Contents
 
@@ -170,7 +170,7 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
+kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Kimi, Pi, OpenCode, Antigravity)
 kcap import --org EventStore    # sessions whose git-remote owner is EventStore
 kcap import --org               # pick an org from your discovered repos (and remember it)
 kcap import --repo owner/repo   # sessions for one specific repo (repeat --repo for several)
@@ -178,6 +178,7 @@ kcap import --cursor            # only Cursor
 kcap import --copilot           # only Copilot
 kcap import --gemini            # only Gemini
 kcap import --kiro              # only Kiro
+kcap import --kimi              # only Kimi Code history
 kcap import --pi                # only Pi (badlogic/pi-mono)
 kcap import --opencode          # only OpenCode
 kcap import --antigravity       # only Antigravity
@@ -191,7 +192,7 @@ kcap import --antigravity       # only Antigravity
 
 > **Codex** collab subagents (Codex CLI 0.146+, the `spawn_agent` collaboration tools) are captured too. Each subagent thread writes its own rollout under `~/.codex/sessions/`; the live watcher discovers children by the parent linkage in their rollout header and streams each one nested under the parent session, and `kcap import --codex` does the same for history — a subagent rollout never imports as a separate top-level session (see [Loading historical sessions](#loading-historical-sessions)).
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), `~/.local/share/opencode/opencode.db` (OpenCode), and both `~/.gemini/antigravity/brain/` (GUI) and `~/.gemini/antigravity-cli/brain/` (the `agy` CLI) (Antigravity) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, `--opencode`, or `--antigravity` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times. Each run ends with `N imported · N skipped · N failed`, then a breakdown of why each session was skipped. Failures never abort the run or change the exit code: everything that could be imported still is, and because the run is idempotent, re-running retries the failures without re-sending anything already on the server.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), both `~/.kimi-code/sessions/` and `~/.kimi/sessions/` (Kimi Code), `~/.pi/agent/sessions/` (Pi), `~/.local/share/opencode/opencode.db` (OpenCode), and both `~/.gemini/antigravity/brain/` (GUI) and `~/.gemini/antigravity-cli/brain/` (the `agy` CLI) (Antigravity) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--kimi`, `--pi`, `--opencode`, or `--antigravity` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times. Each run ends with `N imported · N skipped · N failed`, then a breakdown of why each session was skipped. Failures never abort the run or change the exit code: everything that could be imported still is, and because the run is idempotent, re-running retries the failures without re-sending anything already on the server.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org <owner>` filters by the git-remote owner (GitHub org/user) detected on each session — independent of your profile name, so it behaves identically under GitHub and WorkOS sign-in. A bare `--org` lets you pick an owner from your discovered repos and remembers it for next time. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -655,6 +656,7 @@ kcap import --cursor --cwd /path/to/proj     # only Cursor sessions whose worksp
 kcap import --copilot --all                  # only Copilot — every discovered transcript
 kcap import --gemini --all                   # only Gemini — every discovered transcript
 kcap import --kiro --all                     # only Kiro — every session log under ~/.kiro/sessions/cli
+kcap import --kimi --all                     # only Kimi Code — every root and subagent wire stream
 kcap import --pi --all                       # only Pi — every discovered session
 kcap import --opencode --all                 # only OpenCode — every session in opencode.db
 ```
@@ -662,6 +664,8 @@ kcap import --opencode --all                 # only OpenCode — every session i
 Cursor historical import walks every JSONL transcript under `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and posts each line through the same `POST /hooks/transcript` route the live hook path uses, so live and historical ingest converge on one canonical event stream. The walker resolves each session's working directory by matching its sanitized workspace name against `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json` (on Linux: `~/.config/Cursor/User/...`); sessions whose workspace can't be resolved are still imported, just without `cwd` and git owner/repo enrichment.
 
 Kiro historical import reads each session's append-only log at `~/.kiro/sessions/cli/{id}.jsonl` (plus the sibling `{id}.json` for cwd / model / title) and posts the lines through `POST /hooks/transcript` — the same lines the live watcher tails, so live and historical ingest converge. Set `KIRO_HOME` to point at a non-default location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(session id, message/tool id, kind)`.
+
+Kimi Code historical import reads root wires from `~/.kimi-code/sessions/**/session_<id>/agents/main/wire.jsonl` and `~/.kimi/sessions/<group>/<id>/wire.jsonl`. It attaches the matching Kimi child wires (`agents/agent-N/wire.jsonl` or `subagents/<agent-id>/wire.jsonl`) as subagent streams under that root. This is historical-only support: it does not install a Kimi plugin or hook. Re-imports use the root and per-child watermarks, so completed content is not re-sent and incomplete child lifecycle delivery is repaired.
 
 Codex historical import walks `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Collab subagent rollouts (Codex CLI 0.146+ — the rollout header names the parent thread) are excluded from top-level discovery and imported nested under their parent instead: every transitive descendant (children, grandchildren, and so on, up to a depth of 8) lands as a direct subagent of the top-level root, mirroring the OpenCode import. A rollout whose header can't be read yet (a session actively starting while the import runs) is skipped for that run and picked up by the next one.
 
@@ -687,11 +691,11 @@ kcap import --opencode --session ses_x --reimport  # force one OpenCode session 
 
 `--reimport` forces OpenCode sessions to re-import even when the local completeness ledger (described above) records them as already loaded — the escape hatch for a session that was deleted server-side (e.g. via `kcap disable`) but is still marked complete locally, which a plain re-run would otherwise skip. Scope it with the usual vendor/`--repo`/`--cwd`/`--session` filters to force just the affected sessions; the re-send is idempotent, and a successful forced import refreshes the ledger entry. It has no effect on other vendors, which already re-classify every run.
 
-Import generates a title for each **Claude and Codex** session it loads by shelling out to your own `claude` / `codex` — once per session, on your subscription, in the background. `--skip-title` turns that off, the same opt-out `kcap watch` takes for the same generator. Sessions are fully searchable without a title; it only affects how recognisable they look to you. The other seven agents never generate one locally, so the flag changes nothing for them: Cursor and Copilot forward the name their transcript already carries, OpenCode forwards its native title, and Antigravity, Gemini, Kiro and Pi leave the server to derive one.
+Import generates a title for each **Claude and Codex** session it loads by shelling out to your own `claude` / `codex` — once per session, on your subscription, in the background. `--skip-title` turns that off, the same opt-out `kcap watch` takes for the same generator. Sessions are fully searchable without a title; it only affects how recognisable they look to you. The other eight agents never generate one locally, so the flag changes nothing for them: Cursor and Copilot forward the name their transcript already carries, OpenCode forwards its native title, and Antigravity, Gemini, Kiro, Kimi Code and Pi leave the server to derive one.
 
 Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete. A server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.
 
-`--private` also covers sessions the run only *revisits*. Agents that record subagents (Cursor, Antigravity, Gemini) can attach a previously-missed subagent to a session that was already fully imported, so for those a `--private` re-run marks every session it touched private — not just the ones with brand-new top-level content. That is deliberate: a session's visibility can't be left to whether a re-run happened to find new content, and re-running with `--private` is the supported way to privatize sessions an earlier non-private import made visible.
+`--private` also covers sessions the run only *revisits*. Agents that record subagents (Cursor, Antigravity, Gemini, Kimi Code) can attach a previously-missed subagent to a session that was already fully imported, so for those a `--private` re-run marks every session it touched private — not just the ones with brand-new top-level content. That is deliberate: a session's visibility can't be left to whether a re-run happened to find new content, and re-running with `--private` is the supported way to privatize sessions an earlier non-private import made visible.
 
 After discovery, the import surfaces a one-shot report of any transcript working directories that no longer exist on disk. Sessions whose cwd was an ephemeral worktree (e.g. `~/dev/my-repo/.claude/worktrees/<slug>` or `~/dev/my-repo/.capacitor/worktrees/<slug>`) are transparently attributed to their parent project when that project still exists, so deleted-worktree paths drop out of the missing-cwds list. kcap's own background helper runs (the headless `claude -p` calls behind title generation and "what's done" summaries) record their transcripts in a throwaway temp directory that is removed the moment the run ends; these are never imported, and they're also excluded from the missing-cwds report so its dead temp paths don't drown out real ones. What remains is typically local repo dirs that have been renamed — those won't match an `--org` / `--repo` scope until you tell kcap how their old paths map to the new ones. See [Renamed repo directories (`kcap remap`)](#renamed-repo-directories-kcap-remap) below for the fix.
 

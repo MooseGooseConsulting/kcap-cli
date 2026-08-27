@@ -24,6 +24,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Kimi;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Spectre.Console;
@@ -824,14 +825,15 @@ public static class SetupCommand {
             autoSkipExclusions:      inv.AutoSkipExclusions,
             defaultVisibility:       inv.DefaultVisibility);
 
-    /// <summary>The nine supported import sources — mirrors Program.cs's `kcap import` construction.</summary>
-    static IReadOnlyList<IImportSource> BuildImportSources() => new IImportSource[] {
+    /// <summary>The ten supported import sources — mirrors Program.cs's `kcap import` construction.</summary>
+    internal static IReadOnlyList<IImportSource> BuildImportSources() => new IImportSource[] {
         new ClaudeImportSource(),
         new CodexImportSource(),
         new CursorImportSource(),
         new CopilotImportSource(),
         new GeminiImportSource(),
         new KiroImportSource(),
+        new KimiImportSource(),
         new PiImportSource(),
         new OpenCodeImportSource(),
         new AntigravityImportSource(),

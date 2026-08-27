@@ -43,6 +43,20 @@ public class VendorSelectionTests {
     }
 
     [Test]
+    public async Task kimi_flag_selects_only_kimi_for_historical_import() {
+        var r = VendorSelection.Parse(["import", "--kimi"]);
+        await Assert.That(r.HasError).IsFalse();
+        await Assert.That(r.Vendors).IsEquivalentTo(["kimi"]);
+    }
+
+    [Test]
+    public async Task unknown_kimi_prefixed_flag_is_rejected() {
+        var r = VendorSelection.Parse(["import", "--kimi-session"]);
+        await Assert.That(r.HasError).IsTrue();
+        await Assert.That(r.Error!).Contains("--kimi-session");
+    }
+
+    [Test]
     public async Task multiple_vendor_flags_are_additive() {
         var r = VendorSelection.Parse(["--claude", "--codex"]);
         await Assert.That(r.HasError).IsFalse();

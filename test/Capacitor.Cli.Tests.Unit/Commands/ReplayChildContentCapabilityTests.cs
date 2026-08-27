@@ -6,6 +6,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Kimi;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 
@@ -35,6 +36,7 @@ public class ReplayChildContentCapabilityTests {
     [Arguments("cursor")]
     [Arguments("antigravity")]
     [Arguments("gemini")]
+    [Arguments("kimi")]
     public async Task sources_whose_replay_can_attach_child_content_declare_the_capability(string vendor) {
         await Assert.That(MakeSource(vendor).AttachesChildContentOnReplay).IsTrue();
     }
@@ -65,7 +67,7 @@ public class ReplayChildContentCapabilityTests {
     [Test]
     public async Task every_import_source_is_covered_by_this_table() {
         var declared = new[] {
-            "cursor", "antigravity", "gemini", "claude", "codex", "copilot", "kiro", "pi", "opencode",
+            "cursor", "antigravity", "gemini", "claude", "codex", "copilot", "kiro", "kimi", "pi", "opencode",
         };
 
         var actual = typeof(IImportSource).Assembly.GetTypes()
@@ -91,6 +93,7 @@ public class ReplayChildContentCapabilityTests {
             "cursor"      => new CursorImportSource(scratch, scratch),
             "gemini"      => new GeminiImportSource(tmpDirOverride: scratch),
             "kiro"        => new KiroImportSource(),
+            "kimi"        => new KimiImportSource(scratch),
             "pi"          => new PiImportSource(),
             "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger")),
             "antigravity" => new AntigravityImportSource(home: scratch, geminiCliHome: ""),

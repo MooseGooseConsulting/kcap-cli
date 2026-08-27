@@ -6,6 +6,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Kimi;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 
@@ -94,6 +95,7 @@ internal sealed class ImportDiscoveryAgeTests {
     [Test]
     [Arguments("gemini")]
     [Arguments("kiro")]
+    [Arguments("kimi")]
     [Arguments("pi")]
     [Arguments("copilot")]
     [Arguments("antigravity")]
@@ -115,6 +117,7 @@ internal sealed class ImportDiscoveryAgeTests {
     static IImportSource SourceFor(string vendor) => vendor switch {
         "gemini"      => new GeminiImportSource(),
         "kiro"        => new KiroImportSource(),
+        "kimi"        => new KimiImportSource(),
         "pi"          => new PiImportSource(),
         "copilot"     => new CopilotImportSource(),
         "antigravity" => new AntigravityImportSource(),

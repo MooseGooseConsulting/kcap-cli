@@ -627,7 +627,7 @@ public class FlowsDriverSchemaConformanceTests {
             .Append("--pi")       // no MCP config at all, covered by the bridge test
             .ToHashSet(StringComparer.Ordinal);
 
-        foreach (var flag in VendorSelection.KnownVendorFlags)
+        foreach (var flag in VendorSelection.KnownHarnessVendorFlags)
             await Assert.That(covered.Contains(flag)).IsTrue()
                 .Because($"{flag} is an installable target with no driver-schema conformance coverage");
     }
