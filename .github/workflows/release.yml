@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wait for CI workflow to succeed
-        uses: lewagon/wait-on-check-action@v1.9.1
+        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
           ref: ${{ github.sha }}
           check-regexp: '^(Build and test|AOT publish check.*)$'
@@ -39,10 +39,10 @@ jobs:
     name: Refuse a moved or re-cut release tag
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
 
@@ -227,11 +227,11 @@ jobs:
         if: contains(matrix.rid, 'musl') && !matrix.container
         run: musl-gcc --version
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # No cache: RUNNER_OS keying collapses four Linux legs that need different RID packages.
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
 
       - name: Extract version from tag
         id: version
@@ -469,13 +469,13 @@ jobs:
           fi
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: npm-${{ matrix.npm-package }}
           path: npm/${{ matrix.npm-package }}/
 
       - name: Upload release archive
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-${{ matrix.rid }}
           path: kcap-${{ matrix.rid }}.*
@@ -483,7 +483,7 @@ jobs:
       # Per-RID SQLite native, downloaded on demand by SqliteNativeResolver. Named
       # release-* so the github-release job's `pattern: release-*` publishes it.
       - name: Upload e_sqlite3 native asset
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-sqlite-native-${{ matrix.rid }}
           path: sqlite-native/
@@ -493,10 +493,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -515,7 +515,7 @@ jobs:
         run: echo "TAG=$(bash scripts/npm-dist-tag.sh '${{ steps.version.outputs.VERSION }}')" >> "$GITHUB_OUTPUT"
 
       - name: Download all npm artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: npm-*
           path: npm-artifacts/
@@ -602,14 +602,14 @@ jobs:
 
     steps:
       - name: Download all release archives
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-*
           path: release-artifacts/
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: release-artifacts/*
           generate_release_notes: true
