@@ -35,10 +35,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           cache: true
           # No lock file to key on; CPM makes this the one file that pins every version.
@@ -77,7 +77,7 @@ jobs:
     name: No Linear issue IDs in C# source
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Check for Linear issue ID tokens in src/**/*.cs and test/**/*.cs
         run: bash scripts/check-linear-ids.sh
 
@@ -92,10 +92,10 @@ jobs:
           - src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           cache: true
           # No lock file to key on; CPM makes this the one file that pins every version.
